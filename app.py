@@ -1,5 +1,6 @@
 from flask import Flask, request
-import os, json, requests
+import os
+import requests
 
 app = Flask(__name__)
 
@@ -7,8 +8,15 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 def send_message(text):
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("Missing TELEGRAM_TOKEN or CHAT_ID")
+        return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT_ID, "text": text})
+    requests.post(url, json={
+        "chat_id": CHAT_ID,
+        "text": text
+    })
 
 @app.route("/", methods=["GET"])
 def home():
@@ -17,17 +25,11 @@ def home():
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
-    
-    # Приходять транзакції від Helius → обробляємо
-    try:
-        account = data["events"][0]["source"]
-        amount = data["events"][0]["amount"]
-        mint = data["events"][0]["mint"]
+    print("Webhook received:", data)
 
-        msg = f"🟢 Купівля!\nГаманець: {account}\nСума: {amount} SOL\nМем-коін: {mint}"
-        send_message(msg)
-
-    except Exception as e:
-        send_message(f"⚠️ Помилка парсингу: {e}")
-
+    send_message("🟢 Webhook received. Bot is alive!")
     return "ok"
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
