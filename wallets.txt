@@ -1,3 +1,0 @@
-# Add one wallet per line
-# Example:
-# 7GhP3KfNa93S8XyS1qZjLm3Bk5mxxVp3Zd1AdXjd99aJ
