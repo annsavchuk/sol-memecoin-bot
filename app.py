@@ -46,6 +46,7 @@ def test():
 # ========== WEBHOOK ==========
 @app.route("/", methods=["POST"])
 def webhook():
+   print("RAW PAYLOAD:", request.json) 
     data = request.json
 
     if not data:
