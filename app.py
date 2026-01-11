@@ -14,10 +14,10 @@ if not TELEGRAM_TOKEN or not CHAT_ID:
     print("❌ TELEGRAM_TOKEN or CHAT_ID not set")
 
 # ================== SETTINGS ==================
-MIN_TX_SOL = 0.5        # мінімальна покупка
-LEVEL_1 = 9            # жовтий алерт
-LEVEL_2 = 20           # червоний алерт
-BUFFER_SECONDS = 90    # буфер у секундах
+MIN_TX_SOL = 0.5
+LEVEL_1 = 9
+LEVEL_2 = 20
+BUFFER_SECONDS = 90
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
 STABLECOINS = {"USDC", "USDT"}
@@ -85,7 +85,7 @@ def webhook():
     if not data:
         return jsonify({"ok": True})
 
-    # -------- normalize --------
+    # -------- NORMALIZE PAYLOAD --------
     if isinstance(data, list):
         events = data
     elif isinstance(data, dict):
@@ -96,6 +96,7 @@ def webhook():
     if not events:
         return jsonify({"ok": True})
 
+    # -------- PROCESS EVENTS --------
     for tx in events:
         try:
             wallet = tx.get("feePayer")
@@ -104,13 +105,11 @@ def webhook():
             if not wallet or not token_transfers:
                 continue
 
-            # ================== SOL CALC (CORRECT) ==================
+            # ====== CORRECT SOL CALC ======
             sol_spent = 0
             for acc in tx.get("accountData", []):
                 if acc.get("account") == wallet:
                     change = acc.get("nativeBalanceChange", 0)
-
-                    # якщо баланс зменшився — це витрати
                     if change < 0:
                         sol_spent = abs(change)
                         break
