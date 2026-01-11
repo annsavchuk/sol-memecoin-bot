@@ -115,14 +115,14 @@ def webhook():
             if sol_amount < MIN_TX_SOL:
                 continue
 
-            for t in token_transfers:
-                mint = t.get("mint")
-                if not mint:
-                    continue
+          for t in token_transfers:
+    mint = t.get("mint")
+    if not mint:
+        continue
 
-                # ❌ НЕ показуємо SOL як токен
-                if mint == SOL_MINT:
-                    continue
+    # ❌ не показуємо SOL / wrapped SOL
+    if mint == SOL_MINT or mint.startswith("So111"):
+        continue 
 
                 # ================== BUFFER ==================
                 key = f"{wallet}|{mint}"
