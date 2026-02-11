@@ -11,24 +11,23 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 # ================== CONFIG ==================
-MIN_BUY_SOL = 20           # ординарний BUY
-MULTI_MIN_SOL = 5          # мін. buy для multi
+MIN_BUY_SOL = 20
+MULTI_MIN_SOL = 5
 MULTI_MIN_WALLETS = 3
-AGG_WINDOW = 60            # 60 секунд для агрегації одного wallet
+AGG_WINDOW = 60
 CLUSTER_LIFETIME = 6 * 60 * 60
 
 STABLE_KEYWORDS = ["USD", "USDT", "USDC", "SOL"]
-
 SOL_MINT = "So11111111111111111111111111111111111111112"
 
 # ================== STATE ==================
-wallet_agg = {}   # (wallet, mint) -> {amount, txs, first_ts}
-clusters = {}     # mint -> cluster
+wallet_agg = {}
+clusters = {}
 ledger = defaultdict(lambda: {"buy": 0.0, "sell": 0.0})
 
 # ================== WALLET EMOJIS ==================
 WALLETS = {
-
+    
     "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o": "👽 kentes",
     "5h7yzwmrGoG2BmxNCqNR2EnSv1LWCFo7n6SKSh5ZWkfE": "🖌 307H",
     "4CqecFud362LKgALvChyhj6276he3Sy8yKim1uvFNV1m": "🥴 182 H",
@@ -154,8 +153,8 @@ WALLETS = {
     "KzxoVgkSDR7xXYKykbLmSBKMdwzGTesZS7Mc2iXkK9u": "📙 1",
     "8qX6LuKeDmR6FLg8HhmFxQHKhJbhx1zmRgoCk5RCmbk5": "🐧 366H",
     "8PWPhnXh7P7bwoinAavyqsnU33H67x9wkRCxyAWibGD8": "🐽 ? -60%"
-}
 
+}
 
 # ================== TELEGRAM ==================
 def send_telegram(text, button_url=None):
@@ -165,10 +164,12 @@ def send_telegram(text, button_url=None):
         "parse_mode": "HTML",
         "disable_web_page_preview": False
     }
+
     if button_url:
         payload["reply_markup"] = {
             "inline_keyboard": [[{"text": "AXIOM", "url": button_url}]]
         }
+
     requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
         json=payload,
@@ -180,7 +181,7 @@ def short(addr):
     return f"{addr[:4]}...{addr[-4:]}"
 
 def emoji(wallet):
-    return WALLET_EMOJI.get(wallet, "🔹")
+    return WALLETS.get(wallet, "🔹")
 
 def format_mc(mc):
     if not mc:
@@ -195,6 +196,7 @@ def fetch_token_info(mint):
             f"https://api.dexscreener.com/latest/dex/tokens/{mint}",
             timeout=10
         ).json()
+
         for p in r.get("pairs", []):
             if p.get("chainId") == "solana":
                 symbol = p["baseToken"]["symbol"]
@@ -204,6 +206,7 @@ def fetch_token_info(mint):
                 return symbol, mc, axiom
     except:
         pass
+
     return mint[:6], None, None
 
 def hold_percent(wallet, mint):
@@ -221,10 +224,11 @@ def seen(ts):
         return f"{d//60}m"
     return f"{d//3600}h"
 
-# ================== FORMATTING ==================
+# ================== FORMATTERS ==================
 def format_buy(symbol, mc, wallet, data, mint):
     total = ledger[(wallet, mint)]["buy"]
     hold = hold_percent(wallet, mint)
+
     return f"""🟢 <b>BUY {symbol}</b>
 
 {emoji(wallet)} {short(wallet)}
@@ -238,22 +242,25 @@ Total buy: {total:.2f} SOL | 👊 {hold}%
 
 def format_multi(symbol, mc, cluster, mint):
     txt = f"""‼️ 🟢 <b>MULTI BUY {symbol}</b>
-Multi preset 1
 
-{len(cluster['wallets'])} wallets bought {symbol} in the last 6 hours!
+{len(cluster['wallets'])} wallets bought in 6h
 Total: {cluster['total']:.2f} SOL
 
 """
+
     for w, amt in cluster["wallets"].items():
         total = ledger[(w, mint)]["buy"]
         hold = hold_percent(w, mint)
+
         txt += f"""🔹 {emoji(w)} {short(w)}
 └ {amt:.2f} SOL | MC {format_mc(mc)}
 Total buy: {total:.2f} SOL | 👊 {hold}%
 
 """
+
     txt += f"""#{symbol} | MC: {format_mc(mc)} | Seen: {seen(cluster['first_ts'])}
 {mint}"""
+
     return txt
 
 # ================== WEBHOOK ==================
@@ -270,10 +277,12 @@ def webhook():
         if not wallet:
             continue
 
+        # SOL spent
         sol_spent = 0
         for acc in tx.get("accountData", []):
             if acc.get("account") == wallet:
                 sol_spent = abs(min(acc.get("nativeBalanceChange", 0), 0))
+
         sol = sol_spent / 1e9
         if sol <= 0:
             continue
@@ -284,32 +293,44 @@ def webhook():
                 continue
 
             symbol, mc, axiom = fetch_token_info(mint)
+
             if any(x in symbol.upper() for x in STABLE_KEYWORDS):
                 continue
 
+            # Ledger update
             if t.get("tokenAmount", 0) > 0:
                 ledger[(wallet, mint)]["buy"] += sol
             else:
                 ledger[(wallet, mint)]["sell"] += abs(sol)
 
+            # ================= BUY AGGREGATION =================
             key = (wallet, mint)
             agg = wallet_agg.get(key)
 
             if not agg or now - agg["first_ts"] > AGG_WINDOW:
-                wallet_agg[key] = {"amount": sol, "txs": 1, "first_ts": now}
+                wallet_agg[key] = {
+                    "amount": sol,
+                    "txs": 1,
+                    "first_ts": now,
+                    "alerted": False
+                }
             else:
                 agg["amount"] += sol
                 agg["txs"] += 1
 
+            agg = wallet_agg[key]
+
             # ---------- BUY ----------
-            if wallet_agg[key]["amount"] >= MIN_BUY_SOL:
+            if agg["amount"] >= MIN_BUY_SOL and not agg["alerted"]:
                 send_telegram(
-                    format_buy(symbol, mc, wallet, wallet_agg[key], mint),
+                    format_buy(symbol, mc, wallet, agg, mint),
                     axiom
                 )
+                agg["alerted"] = True
 
-            # ---------- MULTI ----------
+            # ================= MULTI =================
             cl = clusters.get(mint)
+
             if not cl or now - cl["first_ts"] > CLUSTER_LIFETIME:
                 clusters[mint] = {
                     "wallets": {},
