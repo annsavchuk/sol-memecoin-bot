@@ -12,11 +12,11 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-MIN_BUY_SOL = 10           # ordinary alert
-MULTI_MIN_SOL = 5          # min tx for multi
-MULTI_MIN_WALLETS = 3      # wallets for multi
-AGG_WINDOW = 60            # aggregation window
-CLUSTER_LIFETIME = 6 * 3600
+MIN_BUY_SOL = 10           # Поріг для звичайного алерту
+MULTI_MIN_SOL = 5          # Мін. сума для участі в мульти-алерті
+MULTI_MIN_WALLETS = 3      # Кількість гаманців для мульти-алерту
+AGG_WINDOW = 60            # Вікно агрегації (сек)
+CLUSTER_LIFETIME = 6 * 3600 # Кулдаун алерту (6 годин)
 
 STABLE_KEYWORDS = ["USD", "USDT", "USDC", "SOL", "DAI", "WSOL"]
 SOL_MINT = "So11111111111111111111111111111111111111112"
@@ -163,23 +163,16 @@ def memory_cleanup_loop():
     while True:
         time.sleep(1800)
         now = time.time()
-
-        # агрегації
         for k in list(wallet_agg.keys()):
             if now - wallet_agg[k]["first_ts"] > 600:
                 del wallet_agg[k]
-
-        # multi кластери
         for k in list(clusters.keys()):
             if now - clusters[k]["first_ts"] > CLUSTER_LIFETIME + 3600:
                 del clusters[k]
                 sent_multi_count.pop(k, None)
-
-        # ordinary cooldown
         for k in list(sent_ordinary.keys()):
             if now - sent_ordinary[k] > CLUSTER_LIFETIME:
                 del sent_ordinary[k]
-
         if len(ledger) > 5000:
             ledger.clear()
 
@@ -249,14 +242,12 @@ Total hold: 👊 {hold_percent(wallet, mint)}%
 def format_multi(symbol, mc, cluster, mint):
     txt = f"‼️ 🟢 <b>MULTI BUY {symbol}</b>\nMulti preset 1\n\n"
     txt += f"{len(cluster['wallets'])} wallets bought in 6h!\nTotal: {cluster['total']:.2f} SOL\n\n"
-
     for w, amt in cluster["wallets"].items():
         txt += (
             f"{emoji(w)} {short(w)}\n"
             f"└ {amt:.2f} SOL | MC {format_mc(mc)}\n"
             f"Total hold: 👊 {hold_percent(w, mint)}%\n\n"
         )
-
     txt += f"#{symbol} | MC: {format_mc(mc)} | Seen: {seen(cluster['first_ts'])}\n<code>{mint}</code>"
     return txt
 
@@ -265,48 +256,43 @@ def format_multi(symbol, mc, cluster, mint):
 def webhook():
     txs = request.json
     now = time.time()
-    if not isinstance(txs, list):
-        return jsonify(ok=True)
+    if not isinstance(txs, list): return jsonify(ok=True)
 
     for tx in txs:
         wallet = tx.get("feePayer")
-        if not wallet:
-            continue
+        if not wallet: continue
 
+        # Визначаємо чисту зміну SOL для розрахунку об'єму (size)
         net_sol_change = 0
         for acc in tx.get("accountData", []):
             if acc.get("account") == wallet:
                 net_sol_change = acc.get("nativeBalanceChange", 0) / 1e9
-
+        
         sol_abs = abs(net_sol_change)
-        if sol_abs <= 0.005:
-            continue
+        if sol_abs <= 0.005: continue # Відсікаємо дрібні комісії
 
         for t in tx.get("tokenTransfers", []):
             mint = t.get("mint")
-            if mint == SOL_MINT:
-                continue
+            if mint == SOL_MINT: continue
 
-            symbol, mc, axiom = fetch_token_info(mint)
-            if any(x in symbol.upper() for x in STABLE_KEYWORDS):
-                continue
-
-            # BUY якщо витратив SOL
-            is_buy = net_sol_change < 0
+            # --- ЗАЛІЗОБЕТОННИЙ НАПРЯМОК ЗА АДРЕСАМИ ---
+            is_buy = (t.get("toUserAccount") == wallet)
+            is_sell = (t.get("fromUserAccount") == wallet)
 
             if is_buy:
                 ledger[(wallet, mint)]["buy"] += sol_abs
-            else:
+            elif is_sell:
                 ledger[(wallet, mint)]["sell"] += sol_abs
+                continue # Це продаж, не пускаємо в алерт
+            else:
+                continue # Транзакція не стосується переказу токенів нашого кита
 
-            if not is_buy:
-                continue
+            symbol, mc, axiom = fetch_token_info(mint)
+            if any(x in symbol.upper() for x in STABLE_KEYWORDS): continue
 
-            # -------- ORDINARY --------
+            # -------- ORDINARY LOGIC --------
             key = (wallet, mint)
-
-            if key in sent_ordinary and now - sent_ordinary[key] < CLUSTER_LIFETIME:
-                continue
+            if key in sent_ordinary and now - sent_ordinary[key] < CLUSTER_LIFETIME: continue
 
             if key not in wallet_agg or now - wallet_agg[key]["first_ts"] > AGG_WINDOW:
                 wallet_agg[key] = {"amount": sol_abs, "first_ts": now}
@@ -318,19 +304,17 @@ def webhook():
                 sent_ordinary[key] = now
                 del wallet_agg[key]
 
-            # -------- MULTI --------
+            # -------- MULTI LOGIC --------
             if sol_abs >= MULTI_MIN_SOL:
                 if mint not in clusters or now - clusters[mint]["first_ts"] > CLUSTER_LIFETIME:
                     clusters[mint] = {"wallets": {}, "total": 0.0, "first_ts": now}
-
+                
                 cl = clusters[mint]
                 if wallet not in cl["wallets"]:
                     cl["wallets"][wallet] = sol_abs
                     cl["total"] += sol_abs
-
                     w_count = len(cl["wallets"])
                     last = sent_multi_count.get(mint, {}).get("count", 0)
-
                     if w_count >= MULTI_MIN_WALLETS and w_count > last:
                         send_telegram(format_multi(symbol, mc, cl, mint), axiom)
                         sent_multi_count[mint] = {"count": w_count, "ts": now}
