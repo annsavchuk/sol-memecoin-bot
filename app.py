@@ -12,13 +12,13 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-MIN_BUY_SOL = 20           # Для Ordinary Buy
+MIN_BUY_SOL = 10           # Поріг для Ordinary Buy (можеш змінити на 20)
 MULTI_MIN_SOL = 5          # Поріг для Multi Buy
 MULTI_MIN_WALLETS = 3      # Кількість гаманців для Multi
 AGG_WINDOW = 60            # Вікно агрегації секунд
-CLUSTER_LIFETIME = 6 * 3600 # 6 годин
+CLUSTER_LIFETIME = 6 * 3600 # 6 годин (час тиші після алерту)
 
-STABLE_KEYWORDS = ["USD", "USDT", "USDC", "SOL", "DAI"]
+STABLE_KEYWORDS = ["USD", "USDT", "USDC", "SOL", "DAI", "WSOL"]
 SOL_MINT = "So11111111111111111111111111111111111111112"
 
 # ================= STATE =================
@@ -26,10 +26,10 @@ wallet_agg = {}
 clusters = {}            
 ledger = defaultdict(lambda: {"buy": 0.0, "sell": 0.0})
 
+# Тут зберігаємо час останнього алерту, щоб не спамити
 sent_ordinary = {}       
 sent_multi_count = {}    
 
-# Твій список гаманців
 WALLET_EMOJI = {
     "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o": "👽 kentes",
     "5h7yzwmrGoG2BmxNCqNR2EnSv1LWCFo7n6SKSh5ZWkfE": "🖌 307H",
@@ -164,17 +164,21 @@ def memory_cleanup_loop():
         time.sleep(1800)
         now = time.time()
         try:
+            # 1. Агрегації
             expired_agg = [k for k, v in wallet_agg.items() if now - v['first_ts'] > 600]
             for k in expired_agg: del wallet_agg[k]
 
+            # 2. Кластери Multi
             expired_cl = [k for k, v in clusters.items() if now - v['first_ts'] > (CLUSTER_LIFETIME + 3600)]
             for k in expired_cl:
                 del clusters[k]
                 sent_multi_count.pop(k, None)
 
+            # 3. Кулдаун Ordinary (6 годин)
             expired_ord = [k for k, ts in sent_ordinary.items() if now - ts > CLUSTER_LIFETIME]
             for k in expired_ord: del sent_ordinary[k]
 
+            # 4. Ledger
             if len(ledger) > 5000: ledger.clear()
             
             print(f"🧹 Cleanup complete.")
@@ -253,7 +257,7 @@ def format_multi(symbol, mc, cluster, mint):
     txt += f"#{symbol} | MC: {format_mc(mc)} | Seen: {seen(cluster['first_ts'])}\n<code>{mint}</code>"
     return txt
 
-# ================= WEBHOOK (ВИПРАВЛЕНО) =================
+# ================= WEBHOOK (ВИПРАВЛЕНО 2 ПРОБЛЕМИ) =================
 @app.route("/", methods=["POST"])
 def webhook():
     txs = request.json
@@ -264,11 +268,10 @@ def webhook():
         wallet = tx.get("feePayer")
         if not wallet: continue
 
-        # 1. Рахуємо зміну SOL
+        # 1. Рахуємо зміну SOL (плюс чи мінус)
         net_sol_change = 0
         for acc in tx.get("accountData", []):
             if acc.get("account") == wallet:
-                # nativeBalanceChange: від'ємне = витратив, додатне = отримав
                 net_sol_change = acc.get("nativeBalanceChange", 0) / 1e9
 
         sol_abs = abs(net_sol_change)
@@ -281,8 +284,8 @@ def webhook():
             symbol, mc, axiom = fetch_token_info(mint)
             if any(x in symbol.upper() for x in STABLE_KEYWORDS): continue
 
-            # 2. ВИЗНАЧАЄМО НАПРЯМОК:
-            # Якщо net_sol_change < 0, то ми віддали SOL -> КУПІВЛЯ
+            # 2. ВИЗНАЧАЄМО НАПРЯМОК (FIX: Sebastian sell issue)
+            # Якщо баланс зменшився (<0), то ми віддали SOL = КУПІВЛЯ
             is_buy = net_sol_change < 0
 
             # Бухгалтерія
@@ -291,19 +294,31 @@ def webhook():
             else:
                 ledger[(wallet, mint)]["sell"] += sol_abs
 
-            # 3. Фільтруємо: алерти тільки на BUY
+            # 3. ФІЛЬТР: Обробляємо тільки покупки
             if not is_buy: continue
 
-            # --- ORDINARY LOGIC ---
+            # --- ORDINARY LOGIC (FIX: Repetition issue) ---
             key = (wallet, mint)
+
+            # ЖОРСТКА ПЕРЕВІРКА: Якщо ми вже надсилали алерт про цього кита і цей токен
+            # за останні 6 годин - ПРОПУСКАЄМО. Ніяких апдейтів.
+            if key in sent_ordinary:
+                if now - sent_ordinary[key] < CLUSTER_LIFETIME:
+                    continue # Блокуємо повтор
+                else:
+                    del sent_ordinary[key] # Час вийшов, можна знову
+
+            # Агрегація
             if key not in wallet_agg or now - wallet_agg[key]["first_ts"] > AGG_WINDOW:
                 wallet_agg[key] = {"amount": sol_abs, "first_ts": now}
             else:
                 wallet_agg[key]["amount"] += sol_abs
 
-            if wallet_agg[key]["amount"] >= MIN_BUY_SOL and key not in sent_ordinary:
+            # Перевірка порогу
+            if wallet_agg[key]["amount"] >= MIN_BUY_SOL:
                 send_telegram(format_buy(symbol, mc, wallet, wallet_agg[key], mint), axiom)
-                sent_ordinary[key] = now
+                sent_ordinary[key] = now # Ставимо блок на 6 годин
+                del wallet_agg[key] # Очищуємо агрегацію, щоб не висіла в пам'яті
 
             # --- MULTI LOGIC ---
             if sol_abs >= MULTI_MIN_SOL:
