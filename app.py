@@ -8,7 +8,6 @@ from collections import defaultdict
 from functools import lru_cache
 
 logging.basicConfig(level=logging.INFO)
-
 app = Flask(__name__)
 
 # ================= CONFIG =================
@@ -22,6 +21,7 @@ AGG_WINDOW = 60
 CLUSTER_LIFETIME = 6 * 3600
 SIGNATURE_TTL = 600
 
+# Список для фільтрації (щоб не спамити покупками долара чи солани)
 STABLE_KEYWORDS = ["USD", "USDT", "USDC", "SOL", "DAI", "WSOL"]
 SOL_MINT = "So11111111111111111111111111111111111111112"
 
@@ -135,7 +135,7 @@ WALLET_EMOJI = {
     "4Be9CvxqHW6BYiRAxW9Q3xu1ycTMWaL5z8NX4HR3ha7t": "🍀 MITH",
     "7wiEWKeG7sFUNh1TgujwCa9cmJtSSE4mNLDde7knjoeE": "🛰 +$32.2K",
     "BXNiM7pqt9Ld3b2Hc8iT3mA5bSwoe9CRrtkSUs15SLWN": "🎧 ABSOL",
-    "AUqmxUYP9pmU4JwMhQiDKc2TNUCzxE5SGoikqFuKCLQT": "🎬 +$56.2K",
+    "AUqmxUYP9pmU4JwMhQiDKc2TNUCzxE5SGoikqFuKCLQT": "🎬 +$562K",
     "HwAzzsi2NMirgRDs1LeUTLsPENgfL7pBss5ynEpwV7aY": "🐢 NEW-7",
     "3pkY4S76Jw1UDS8Qgz4wD3DxrTxz7QfyC8yTbXJoZcMT": "🦘 Kai",
     "6EDaVsS6enYgJ81tmhEkiKFcb4HuzPUVFZeom6PHUqN3": "🛵",
@@ -153,31 +153,6 @@ WALLET_EMOJI = {
     "8qX6LuKeDmR6FLg8HhmFxQHKhJbhx1zmRgoCk5RCmbk5": "🐧 366H",
     "8PWPhnXh7P7bwoinAavyqsnU33H67x9wkRCxyAWibGD8": "🐽 ? -60%"
 }
-
-# ================= CLEANER =================
-def cleanup_loop():
-    while True:
-        time.sleep(1800)
-        now = time.time()
-        with lock:
-            for sig in list(processed_signatures):
-                if now - processed_signatures[sig] > SIGNATURE_TTL:
-                    del processed_signatures[sig]
-            for k in list(wallet_agg):
-                if now - wallet_agg[k]["first_ts"] > 600:
-                    del wallet_agg[k]
-            for k in list(clusters):
-                if now - clusters[k]["first_ts"] > CLUSTER_LIFETIME + 3600:
-                    del clusters[k]
-                    sent_multi_count.pop(k, None)
-            for k in list(sent_ordinary):
-                if now - sent_ordinary[k] > CLUSTER_LIFETIME:
-                    del sent_ordinary[k]
-            if len(ledger) > 10000:
-                to_delete = [k for k, v in ledger.items() if v["buy"] <= v["sell"]]
-                for k in to_delete: del ledger[k]
-
-threading.Thread(target=cleanup_loop, daemon=True).start()
 
 # ================= HELPERS =================
 def short(addr): return f"{addr[:4]}...{addr[-4:]}"
@@ -219,6 +194,31 @@ def send(text, url=None):
     try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",json=payload,timeout=8)
     except Exception as e: logging.error(f"TG Error: {e}")
 
+# ================= CLEANER =================
+def cleanup_loop():
+    while True:
+        time.sleep(1800)
+        now = time.time()
+        with lock:
+            for sig in list(processed_signatures):
+                if now - processed_signatures[sig] > SIGNATURE_TTL:
+                    del processed_signatures[sig]
+            for k in list(wallet_agg):
+                if now - wallet_agg[k]["first_ts"] > 600:
+                    del wallet_agg[k]
+            for k in list(clusters):
+                if now - clusters[k]["first_ts"] > CLUSTER_LIFETIME + 3600:
+                    del clusters[k]
+                    sent_multi_count.pop(k, None)
+            for k in list(sent_ordinary):
+                if now - sent_ordinary[k] > CLUSTER_LIFETIME:
+                    del sent_ordinary[k]
+            if len(ledger) > 10000:
+                to_delete = [k for k, v in ledger.items() if v["buy"] <= v["sell"]]
+                for k in to_delete: del ledger[k]
+
+threading.Thread(target=cleanup_loop, daemon=True).start()
+
 # ================= DEBOUNCED SENDER =================
 def delayed_ordinary_send(wallet, mint, key):
     with lock:
@@ -228,13 +228,16 @@ def delayed_ordinary_send(wallet, mint, key):
         sent_ordinary[key] = time.time()
 
     symbol = get_symbol(mint)
+    # Подвійна перевірка символу перед відправкою (про всяк випадок)
+    if any(x in symbol.upper() for x in STABLE_KEYWORDS): return
+
     mc, pair = get_market(mint)
     ax = build_axiom(mint, pair)
     
     txt = (f"🟢 <b>BUY {symbol}</b>\n\n"
            f"{emoji(wallet)} {short(wallet)}\n"
-           f"└ {final_amt:.2f} SOL | MC {format_mc(mc)}\n"
-           f"Total hold: 👊 {hold_percent(wallet, mint)}%\n\n"
+           f"└ <b>{final_amt:.2f} SOL</b> | MC {format_mc(mc)}\n"
+           f"Hold: 👊 {hold_percent(wallet, mint)}%\n\n"
            f"<code>{mint}</code>")
     send(txt, ax)
 
@@ -279,7 +282,12 @@ def webhook():
 
         if not bought_mint: continue
 
-        # --- ORDINARY (DEBOUNCE LOGIC) ---
+        # --- КЛЮЧОВИЙ ФІЛЬТР СИМВОЛУ (ВИПРАВЛЕНО) ---
+        symbol = get_symbol(bought_mint)
+        if any(x in symbol.upper() for x in STABLE_KEYWORDS):
+            continue
+
+        # --- ORDINARY BUY (DEBOUNCE) ---
         key = (wallet, bought_mint)
         with lock:
             is_recent = key in sent_ordinary and now - sent_ordinary[key] < CLUSTER_LIFETIME
@@ -293,7 +301,7 @@ def webhook():
                     wallet_agg[key]["timer_started"] = True
                     threading.Timer(15.0, delayed_ordinary_send, args=[wallet, bought_mint, key]).start()
 
-        # --- MULTI BUY LOGIC (FIXED: Added individual amounts) ---
+        # --- MULTI BUY ---
         if sol_abs >= MULTI_MIN_SOL:
             with lock:
                 if bought_mint not in clusters or now-clusters[bought_mint]["first_ts"]>CLUSTER_LIFETIME:
@@ -310,18 +318,17 @@ def webhook():
                         sent_multi_count[bought_mint] = {"count": w_count, "ts": now}
                         snapshot = {"total": cl["total"], "wallets": cl["wallets"].copy()}
                         
-                        def send_multi_delayed(m, snap, count):
-                            sym = get_symbol(m)
+                        def send_multi_delayed(m, snap, count, sym_name):
                             mcap, pr = get_market(m)
                             ax_url = build_axiom(m, pr)
-                            txt = f"‼️ 🟢 <b>MULTI BUY {sym}</b>\n\n{count} wallets | {snap['total']:.2f} SOL\n\n"
-                            # ТУТ ВИПРАВЛЕНО: додаємо суму для кожного гаманця
+                            txt = f"‼️ 🟢 <b>MULTI BUY {sym_name}</b>\n\n{count} wallets | {snap['total']:.2f} SOL\n\n"
                             for w, amt in snap["wallets"].items():
+                                # Тепер відображаємо суму покупки для кожного гаманця
                                 txt += f"{emoji(w)} {short(w)} — <b>{amt:.2f} SOL</b> 👊 {hold_percent(w, m)}%\n"
                             txt += f"\n<code>{m}</code>"
                             send(txt, ax_url)
                         
-                        threading.Thread(target=send_multi_delayed, args=[bought_mint, snapshot, w_count]).start()
+                        threading.Thread(target=send_multi_delayed, args=[bought_mint, snapshot, w_count, symbol]).start()
 
     return jsonify(ok=True)
 
