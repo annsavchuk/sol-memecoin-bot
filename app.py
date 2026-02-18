@@ -10,38 +10,32 @@ from functools import lru_cache
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
-# ================= CONFIG (Під твої назви в Render) =================
+# ================= CONFIG (Render Vars) =================
 TOKEN_MULTI = os.getenv("TOKEN_MULTI")
 CHAT_MULTI = os.getenv("CHAT_MULTI")
-
 TOKEN_SINGLE = os.getenv("TOKEN_SINGLE")
 CHAT_SINGLE = os.getenv("CHAT_SINGLE")
 
-# Якщо ти раптом не перейменовувала старі, код підстрахується:
 if not TOKEN_MULTI: TOKEN_MULTI = os.getenv("TELEGRAM_TOKEN")
 if not CHAT_MULTI: CHAT_MULTI = os.getenv("CHAT_ID")
 
-MIN_BUY_SOL = 20.0  # Поріг для китів у новому каналі
-MULTI_MIN_SOL = 5.0
+MIN_BUY_SOL = 20.0  
+MULTI_MIN_SOL = 5.0 
 MULTI_MIN_WALLETS = 3
 CLUSTER_LIFETIME = 6 * 3600
-SIGNATURE_TTL = 600
-
-STABLE_KEYWORDS = ["USD", "USDT", "USDC", "SOL", "DAI", "WSOL"]
 SOL_MINT = "So11111111111111111111111111111111111111112"
+STABLE_KEYWORDS = ["USD", "USDT", "USDC", "SOL", "DAI", "WSOL"]
 
 # ================= STATE =================
-wallet_agg = {}
 clusters = {}
 ledger = defaultdict(lambda: {"buy": 0.0, "sell": 0.0})
-sent_ordinary = {}
 sent_multi_count = {} 
 processed_signatures = {}
-
 lock = threading.Lock()
 
-# ================= WALLET EMOJI =================
+# ================= ПОВНИЙ СПИСОК ГАМАНЦІВ =================
 WALLET_EMOJI = {
+    # Твої попередні гаманці
     "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o": "👽 kentes",
     "5h7yzwmrGoG2BmxNCqNR2EnSv1LWCFo7n6SKSh5ZWkfE": "🖌 307H",
     "4CqecFud362LKgALvChyhj6276he3Sy8yKim1uvFNV1m": "🥴 182 H",
@@ -75,7 +69,6 @@ WALLET_EMOJI = {
     "AeLaMjzxErZt4drbWVWvcxpVyo8p94xu5vrg41eZPFe3": "😡 simle",
     "GrXjXop95XkVPYJafDJNCLFzK9K8LkpopxYcgUUn2H87": "🦁 NEW-189",
     "mW4PZB45isHmnjGkLpJvjKBzVS5NXzTJ8UDyug4gTsM": "🐺 igndex",
-    "XXXXXahGswEH6i3Czn19XbGxQrobJoY1TYJegPxp3ex": "Parrot +$73.1к",
     "JDd3hy3gQn2V982mi1zqhNqUw1GfV2UL6g76STojCJPN": "🍃 WEST",
     "EzbeF2bADKo6GutJyWmgodyGJFeBPhcrXSdZUXPX5WGc": "🍍 254Н",
     "53BnNc49Ajgstciq3CRoyxuBpkkW1r8pgPyvr7JGYnsh": "👾 Monki",
@@ -156,7 +149,59 @@ WALLET_EMOJI = {
     "4u3Baa6znzQ6pjQRLii8KV9tRhtNuXCqwVcY3b6nNpaZ": "🍆 +$303",
     "KzxoVgkSDR7xXYKykbLmSBKMdwzGTesZS7Mc2iXkK9u": "📙 1",
     "8qX6LuKeDmR6FLg8HhmFxQHKhJbhx1zmRgoCk5RCmbk5": "🐧 366H",
-    "8PWPhnXh7P7bwoinAavyqsnU33H67x9wkRCxyAWibGD8": "🐽 ? -60%"
+    "8PWPhnXh7P7bwoinAavyqsnU33H67x9wkRCxyAWibGD8": "🐽 ? -60%",
+
+    # НОВІ ГАМАНЦІ (додано зараз)
+    "34ZEH778zL8ctkLwxxERLX5ZnUu6MuFyX9CWrs8kucMw": "⚓ 111к",
+    "CueDkwDYr8ZXRwMseprUpCqsz1Zj1VgLnZNRFyQHkfwZ": "7️⃣ 284Н",
+    "3in1nAQoJdnTZsYdmgVfJFLrRR1EoE3HVjyVnZVTMULV": "🦃 279К",
+    "HuP4RYp6ZRmhjikmbaHqzNwA71JoQ7oqQMHEZHUWQ4Rb": "⛱ 214",
+    "M5Q1hFKopMr2DyNabEkrgoh6tGaF6z6NVQZ5SGUPss8": "🪓 Wallet 159",
+    "DMqibTACAF4piJjA92Kuim7pxzuNGFizmuZ5KTtttnx8": "🥪 Sandwich/DEX",
+    "CdFHmaj37EtjgRqvyt6vZqoA9tuMSvKLSmbgpuV6ejaP": "💊 442H",
+    "F9meywQee74tqAKQvDb4Q9bon7y2XLNwUyFYUNEQUto9": "🏆 Top",
+    "2RssnB7hcrnBEx55hXMKT1E7gN27g9ecQFbbCc5Zjajq": "🥴 mostache",
+    "DiddyP7tSoS5e26zzy43QVfgTQ3dJ8ZyLibC3uPAAwQk": "🧙 DiddyP",
+    "FhLmFRG4iUAN48jXkuEc2fAz9E9ZUbZuW2my7g8TFvsC": "🛒 Wallet 110",
+    "ERgtHKpakjFBtcgrh4abzpqFCQKsMdM7QXdE1sfafrWU": "🏅 361Н",
+    "Gf9XgdmvNHt8fUTFsWAccNbKeyDXsgJyZN8iFJKg5Pbd": "🦓 10H",
+    "BZi5L1mCmVjXdUmeCRQWfKvuWqXakmRYQPFpmS559hD1": "⌛ 118Н",
+    "99i9uVA7Q56bY22ajKKUfTZTgTeP5yCtVGsrG9J4pDYQ": "🥺 Zrool",
+    "GjBhR6AY2h8d9rg3xrnQpSYRgK57eAnJs8agYFCkA1qM": "🍯 +$93.6K",
+    "87MZqjjJgpuFvaU8GyQJKbZGnCFFhX82qAjBGLRXPfcn": "🥁 Nyhrox",
+    "pndujwi7BeaRRenYHSShyNQXAdBNEzKDR5jgzbheJFT": "🍺 Unknown",
+    "Gq1RQQcvbZu9Ud2wVRy6Krh9RsS1ZYbLBsBuMuvCgyRU": "🌽 Corn",
+    "9ZzjXiwkGRDBwVHJitfx8AmnN2YUbnqW6M1tH38juEeJ": "🎉 NEW-321",
+    "9HCTuTPEiQvkUtLmTZvK6uch4E3pDynwJTbNw6jLhp9z": "🎡 Wallet 236",
+    "DgJxxRStmjsuK1EbPBuVuH7cd68XHKUNV33aeoUfS8ai": "🔍 364Н",
+    "HRFekhACsTUj9tRNHR8VfgBSYZp4BodaQwrqfpSePkMT": "👹 +$103K",
+    "HtucFepgUkMpHdrYsxMqjBNN6qVBdjmFaLZneNXopuJm": "🥵 Qaunt",
+    "J8fYZbmCnAL5WByigxqoum1disKUrZbsAmupfkXMvrmw": "🏁 Wallet 203",
+    "BiNp5o3D1NDX4U67wbdvq9nTZUmDoiMRMbNn4dJB2rP9": "🐹 365Н",
+    "C3nLTNMK6Ao1s3J1CQhv8GbT3NoMmifWoi9PGEcYd9hP": "👮 $57.7K",
+    "8fSnLTnRViK83dDesivTsPx2wiRhwti9xoafeMGjEyLJ": "🎗️ 27H",
+    "BC8yiFFQWFEKrEEj75zYsuK3ZDCfv6QEeMRif9oZZ9TW": "🥟 Dumpling",
+    "HEW8TmjdtJmAeMWZYG2pZd97FwZybtvJMkFjJmqMz64E": "⛸️ Skates",
+    "BHREKFkPQgAtDs8Vb1UfLkUpjG6ScidTjHaCWFuG2AtX": "🎺 Trumpet",
+    "9jyqFiLnruggwNn4EQwBNFXwpbLM9hrA4hV59ytyAVVz": "😁 NACH",
+    "xXpRSpAe1ajq4tJP78tS3X1AqNwJVQ4Vvb1Swg4hHQh": "🪀 aloh",
+    "GybhvUZzTq4qYBc292dz4HE4oQPZJGC9xGJdEH9uYeHK": "⛺ КИТ",
+    "9yYya3F5EJoLnBNKW6z4bZvyQytMXzDcpU5D6yYr4jqL": "🥕 loopierr",
+    "A4DCAjDwkq5jYhNoZ5Xn2NbkTLimARkerVv81w2dhXgL": "🛠️ Wallet 88",
+    "929fdCX5PbGr7rxrUb7GEyVbxka9WXszGkzHrnnCZ58m": "🔱 Trident",
+    "ApRnQN2HkbCn7W2WWiT2FEKvuKJp9LugRyAE1a9Hdz1": "🌐 S-Network",
+    "3ZsXXbXheMS2D6D6RRuJhERwh82aTgLy2JwFv6PRc4bM": "🍀 Clover",
+    "BtMBMPkoNbnLF9Xn552guQq528KKXcsNBNNBre3oaQtr": "🌠 NEW-210",
+    "3h65MmPZksoKKyEpEjnWU2Yk2iYT5oZDNitGy5cTaxoE": "🚢 Wallet 13",
+    "DKgvpfttzmJqZXdavDwTxwSVkajibjzJnN2FA99dyciK": "🦆 167H",
+    "FSvK6sxyLje1A8V7pbXWyroqyFmN41j5oseDCBHjTXL4": "🧢 NEW-305",
+    "8deJ9xeUvXSJwicYptA9mHsU2rN2pDx37KWzkDkEXhU6": "👷 Cooker",
+    "G1pRtSyKuWSjTqRDcazzKBDzqEF96i1xSURpiXj3yFcc": "🌺 87Н",
+    "286CHN57Km41GsAnDv866WKd6YB6HPSjFgF4rGDJTRLf": "🐼 NEW-50",
+    "6T8Yr9DUUS2R8GHevaeaZcoxA1Jku51ZBkmcM7NaZiNE": "🌭 306Н",
+    "4hSXPtxZgXFpo6Vxq9yqxNjcBoqWN3VoaPJWonUtupzD": "🐘 23Н",
+    "BH84Uo2YAnyWRUWeWyfFzttRmE51V682xUaD6NrLHM88": "🔑 100Н",
+    "GwyG5FQRNtY1faXYWdTLbcDNZTyW5d2Z63o1UiMUDQDT": "🥨 Pretzel"
 }
 
 # ================= HELPERS =================
@@ -195,32 +240,19 @@ def build_axiom(mint, pair):
 
 def send_to_bot(token, chat_id, text, url=None):
     if not token or not chat_id: return
-    payload = {"chat_id":chat_id,"text":text,"parse_mode":"HTML","disable_web_page_preview":True}
-    if url: payload["reply_markup"]={"inline_keyboard":[[{"text":"AXIOM","url":url}]]}
-    try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage",json=payload,timeout=8)
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    if url: payload["reply_markup"] = {"inline_keyboard": [[{"text": "AXIOM", "url": url}]]}
+    try:
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=8)
     except Exception as e: logging.error(f"TG Error: {e}")
 
-# ================= WHALE SENDER =================
-def delayed_ordinary_send(wallet, mint, key):
-    now = time.time()
-    with lock:
-        if key not in wallet_agg: return
-        final_amt = wallet_agg[key]["amount"]
-        del wallet_agg[key]
-        sent_ordinary[key] = now
+# ================= STARTUP =================
+def startup():
+    time.sleep(5)
+    send_to_bot(TOKEN_MULTI, CHAT_MULTI, "✅ Multi-Bot підключено (v5.1 з новими гаманцями)")
+    send_to_bot(TOKEN_SINGLE, CHAT_SINGLE, "✅ Whale-Bot підключено (v5.1 з новими гаманцями)")
 
-    symbol = get_symbol(mint)
-    if any(x in symbol.upper() for x in STABLE_KEYWORDS): return
-
-    mc, pair = get_market(mint)
-    ax = build_axiom(mint, pair)
-    
-    txt = (f"🐳 <b>WHALE BUY {symbol}</b>\n\n"
-           f"{emoji(wallet)} {short(wallet)}\n"
-           f"└ <b>{final_amt:.2f} SOL</b> | MC {format_mc(mc)}\n"
-           f"Hold: 👊 {hold_percent(wallet, mint)}%\n\n"
-           f"<code>{mint}</code>")
-    send_to_bot(TOKEN_SINGLE, CHAT_SINGLE, txt, ax)
+threading.Thread(target=startup).start()
 
 # ================= WEBHOOK =================
 @app.route("/", methods=["POST"])
@@ -246,7 +278,7 @@ def webhook():
                 net_sol = acc.get("nativeBalanceChange",0)/1e9
         
         sol_abs = abs(net_sol)
-        if sol_abs <= 0.005: continue
+        if sol_abs <= 0.05: continue
 
         bought_mint = None
         for t in tx.get("tokenTransfers",[]):
@@ -262,24 +294,22 @@ def webhook():
         symbol = get_symbol(bought_mint)
         if any(x in symbol.upper() for x in STABLE_KEYWORDS): continue
 
-        # --- WHALES (> 20 SOL) ---
-        key = (wallet, bought_mint)
-        with lock:
-            if key not in sent_ordinary or now - sent_ordinary[key] > CLUSTER_LIFETIME:
-                if key not in wallet_agg:
-                    wallet_agg[key] = {"amount": sol_abs, "first_ts": now, "timer_started": False}
-                else:
-                    wallet_agg[key]["amount"] += sol_abs
-
-                if wallet_agg[key]["amount"] >= MIN_BUY_SOL and not wallet_agg[key]["timer_started"]:
-                    wallet_agg[key]["timer_started"] = True
-                    threading.Timer(15.0, delayed_ordinary_send, args=[wallet, bought_mint, key]).start()
+        # --- WHALES (20+ SOL) ---
+        if sol_abs >= MIN_BUY_SOL:
+            mc, pair = get_market(bought_mint)
+            ax_u = build_axiom(bought_mint, pair)
+            txt_w = (f"🐳 <b>WHALE BUY {symbol}</b>\n\n"
+                     f"{emoji(wallet)} {short(wallet)}\n"
+                     f"└ <b>{sol_abs:.2f} SOL</b> | MC {format_mc(mc)}\n"
+                     f"Hold: 👊 {hold_percent(wallet, bought_mint)}%\n\n"
+                     f"<code>{bought_mint}</code>")
+            send_to_bot(TOKEN_SINGLE, CHAT_SINGLE, txt_w, ax_u)
 
         # --- MULTI BUY ---
         if sol_abs >= MULTI_MIN_SOL:
             with lock:
-                if bought_mint not in clusters or now-clusters[bought_mint]["first_ts"]>CLUSTER_LIFETIME:
-                    clusters[bought_mint]={"wallets":{},"total":0.0,"first_ts":now}
+                if bought_mint not in clusters or now - clusters[bought_mint]["first_ts"] > CLUSTER_LIFETIME:
+                    clusters[bought_mint] = {"wallets": {}, "total": 0.0, "first_ts": now}
                 
                 cl = clusters[bought_mint]
                 if wallet not in cl["wallets"]:
@@ -294,12 +324,12 @@ def webhook():
                         
                         def send_m(m, snap, count, sym):
                             _, pr = get_market(m)
-                            ax_u = build_axiom(m, pr)
-                            txt = f"‼️ 🟢 <b>MULTI BUY {sym}</b>\n\n{count} wallets | {snap['total']:.2f} SOL\n\n"
-                            for w, amt in snap["wallets"].items():
-                                txt += f"{emoji(w)} {short(w)} — <b>{amt:.2f} SOL</b>\n"
-                            txt += f"\n<code>{m}</code>"
-                            send_to_bot(TOKEN_MULTI, CHAT_MULTI, txt, ax_u)
+                            ax_multi = build_axiom(m, pr)
+                            txt_m = f"‼️ 🟢 <b>MULTI BUY {sym}</b>\n\n{count} wallets | {snap['total']:.2f} SOL\n\n"
+                            for wal, amt in snap["wallets"].items():
+                                txt_m += f"{emoji(wal)} {short(wal)} — <b>{amt:.2f} SOL</b>\n"
+                            txt_m += f"\n<code>{m}</code>"
+                            send_to_bot(TOKEN_MULTI, CHAT_MULTI, txt_m, ax_multi)
                         
                         threading.Thread(target=send_m, args=[bought_mint, snapshot, w_count, symbol]).start()
 
