@@ -7,18 +7,17 @@ from flask import Flask, request, jsonify
 from collections import defaultdict
 from functools import lru_cache
 
+# Налаштування логів для відстеження помилок у Render
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
-# ================= CONFIG (Render Vars) =================
+# ================= CONFIG (Render Environment Variables) =================
 TOKEN_MULTI = os.getenv("TOKEN_MULTI")
 CHAT_MULTI = os.getenv("CHAT_MULTI")
 TOKEN_SINGLE = os.getenv("TOKEN_SINGLE")
 CHAT_SINGLE = os.getenv("CHAT_SINGLE")
 
-if not TOKEN_MULTI: TOKEN_MULTI = os.getenv("TELEGRAM_TOKEN")
-if not CHAT_MULTI: CHAT_MULTI = os.getenv("CHAT_ID")
-
+# Якщо змінні не задані, бот не зможе працювати
 MIN_BUY_SOL = 20.0  
 MULTI_MIN_SOL = 5.0 
 MULTI_MIN_WALLETS = 3
@@ -33,9 +32,8 @@ sent_multi_count = {}
 processed_signatures = {}
 lock = threading.Lock()
 
-# ================= ПОВНИЙ СПИСОК ГАМАНЦІВ =================
+# ================= WALLET DATABASE (164 ADDRESSES) =================
 WALLET_EMOJI = {
-    # Твої попередні гаманці
     "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o": "👽 kentes",
     "5h7yzwmrGoG2BmxNCqNR2EnSv1LWCFo7n6SKSh5ZWkfE": "🖌 307H",
     "4CqecFud362LKgALvChyhj6276he3Sy8yKim1uvFNV1m": "🥴 182 H",
@@ -150,8 +148,6 @@ WALLET_EMOJI = {
     "KzxoVgkSDR7xXYKykbLmSBKMdwzGTesZS7Mc2iXkK9u": "📙 1",
     "8qX6LuKeDmR6FLg8HhmFxQHKhJbhx1zmRgoCk5RCmbk5": "🐧 366H",
     "8PWPhnXh7P7bwoinAavyqsnU33H67x9wkRCxyAWibGD8": "🐽 ? -60%",
-
-    # НОВІ ГАМАНЦІ (додано зараз)
     "34ZEH778zL8ctkLwxxERLX5ZnUu6MuFyX9CWrs8kucMw": "⚓ 111к",
     "CueDkwDYr8ZXRwMseprUpCqsz1Zj1VgLnZNRFyQHkfwZ": "7️⃣ 284Н",
     "3in1nAQoJdnTZsYdmgVfJFLrRR1EoE3HVjyVnZVTMULV": "🦃 279К",
@@ -243,14 +239,30 @@ def send_to_bot(token, chat_id, text, url=None):
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
     if url: payload["reply_markup"] = {"inline_keyboard": [[{"text": "AXIOM", "url": url}]]}
     try:
-        requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=8)
-    except Exception as e: logging.error(f"TG Error: {e}")
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=8)
+        return r
+    except Exception as e:
+        logging.error(f"TG Error: {e}")
+        return None
 
-# ================= STARTUP =================
+# ================= STARTUP DIAGNOSTICS =================
 def startup():
-    time.sleep(5)
-    send_to_bot(TOKEN_MULTI, CHAT_MULTI, "✅ Multi-Bot підключено (v5.1 з новими гаманцями)")
-    send_to_bot(TOKEN_SINGLE, CHAT_SINGLE, "✅ Whale-Bot підключено (v5.1 з новими гаманцями)")
+    time.sleep(10)
+    logging.info("--- STARTING SYSTEM CHECK ---")
+    
+    # Перевірка мульти-бота
+    res_m = send_to_bot(TOKEN_MULTI, CHAT_MULTI, "✅ Multi-Bot підключено")
+    if res_m and res_m.status_code == 200:
+        logging.info("MULTI-BOT: OK")
+    else:
+        logging.error(f"MULTI-BOT ERROR: {res_m.text if res_m else 'No response'}")
+
+    # Перевірка одиночного (ординарного) бота
+    res_s = send_to_bot(TOKEN_SINGLE, CHAT_SINGLE, "✅ Whale-Bot (Ординарний) підключено")
+    if res_s and res_s.status_code == 200:
+        logging.info("SINGLE-BOT: OK")
+    else:
+        logging.error(f"SINGLE-BOT ERROR: {res_s.text if res_s else 'No response'}")
 
 threading.Thread(target=startup).start()
 
