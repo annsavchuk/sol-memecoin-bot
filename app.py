@@ -13,12 +13,12 @@ app = Flask(__name__)
 # ================= CONFIG (НАЛАШТУВАННЯ) =================
 
 # 1. ТОКЕН БОТА (береться з BotFather)
-TOKEN_MULTI = 8523462104:AAFDQXP1kN3kVX9qce9-MEeowAdA2WgRsm4("TOKEN_MULTI")
-TOKEN_SINGLE = 8241634829:AAEBpQuao0Y3stdeeJcFIimSPVf0pxqnaHY("TOKEN_SINGLE")
+TOKEN_MULTI = "8523462104:AAFDQXP1kN3kVX9qce9-MEeowAdA2WgRsm4"("TOKEN_MULTI")
+TOKEN_SINGLE = "8241634829:AAEBpQuao0Y3stdeeJcFIimSPVf0pxqnaHY"("TOKEN_SINGLE")
 
 # 2. ID КАНАЛІВ (мають починатися на -100...)
-CHAT_MULTI = 598070533("CHAT_MULTI")
-CHAT_SINGLE = -1003751456503("CHAT_SINGLE")
+CHAT_MULTI = "598070533"("CHAT_MULTI")
+CHAT_SINGLE = "-1003751456503"("CHAT_SINGLE")
 
 # --- ЗАХИСТ: Якщо SINGLE не налаштований, використовуємо дані MULTI ---
 if not TOKEN_SINGLE: TOKEN_SINGLE = TOKEN_MULTI
