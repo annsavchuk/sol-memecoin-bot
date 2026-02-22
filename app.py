@@ -10,37 +10,32 @@ from functools import lru_cache
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
-# ================= CONFIG (НАЛАШТУВАННЯ) =================
+# ================= CONFIG =================
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-# 1. ТОКЕН БОТА (береться з BotFather)
-TOKEN_MULTI = "8523462104:AAFDQXP1kN3kVX9qce9-MEeowAdA2WgRsm4"("TOKEN_MULTI")
-TOKEN_SINGLE = "8241634829:AAEBpQuao0Y3stdeeJcFIimSPVf0pxqnaHY"("TOKEN_SINGLE")
-
-# 2. ID КАНАЛІВ (мають починатися на -100...)
-CHAT_MULTI = "598070533"("CHAT_MULTI")
-CHAT_SINGLE = "-1003751456503"("CHAT_SINGLE")
-
-# --- ЗАХИСТ: Якщо SINGLE не налаштований, використовуємо дані MULTI ---
-if not TOKEN_SINGLE: TOKEN_SINGLE = TOKEN_MULTI
-if not CHAT_SINGLE: CHAT_SINGLE = CHAT_MULTI
-
-MIN_BUY_SOL = 20.0  
-MULTI_MIN_SOL = 5.0 
+MIN_BUY_SOL = 10
+MULTI_MIN_SOL = 5
 MULTI_MIN_WALLETS = 3
+AGG_WINDOW = 60
 CLUSTER_LIFETIME = 6 * 3600
-SOL_MINT = "So11111111111111111111111111111111111111112"
+SIGNATURE_TTL = 600
+
 STABLE_KEYWORDS = ["USD", "USDT", "USDC", "SOL", "DAI", "WSOL"]
+SOL_MINT = "So11111111111111111111111111111111111111112"
 
 # ================= STATE =================
+wallet_agg = {}
 clusters = {}
 ledger = defaultdict(lambda: {"buy": 0.0, "sell": 0.0})
-sent_multi_count = {} 
+sent_ordinary = {}
+sent_multi_count = {} # Тут зберігаємо час останнього мульти-алерту для токена
 processed_signatures = {}
+
 lock = threading.Lock()
 
-# ================= БАЗА ГАМАНЦІВ (164 шт) =================
+# ================= WALLET EMOJI =================
 WALLET_EMOJI = {
-    # ТУТ ВАШІ 114 СТАРИХ ГАМАНЦІВ...
     "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o": "👽 kentes",
     "5h7yzwmrGoG2BmxNCqNR2EnSv1LWCFo7n6SKSh5ZWkfE": "🖌 307H",
     "4CqecFud362LKgALvChyhj6276he3Sy8yKim1uvFNV1m": "🥴 182 H",
@@ -74,6 +69,7 @@ WALLET_EMOJI = {
     "AeLaMjzxErZt4drbWVWvcxpVyo8p94xu5vrg41eZPFe3": "😡 simle",
     "GrXjXop95XkVPYJafDJNCLFzK9K8LkpopxYcgUUn2H87": "🦁 NEW-189",
     "mW4PZB45isHmnjGkLpJvjKBzVS5NXzTJ8UDyug4gTsM": "🐺 igndex",
+    "XXXXXahGswEH6i3Czn19XbGxQrobJoY1TYJegPxp3ex": "Parrot +$73.1к",
     "JDd3hy3gQn2V982mi1zqhNqUw1GfV2UL6g76STojCJPN": "🍃 WEST",
     "EzbeF2bADKo6GutJyWmgodyGJFeBPhcrXSdZUXPX5WGc": "🍍 254Н",
     "53BnNc49Ajgstciq3CRoyxuBpkkW1r8pgPyvr7JGYnsh": "👾 Monki",
@@ -154,62 +150,10 @@ WALLET_EMOJI = {
     "4u3Baa6znzQ6pjQRLii8KV9tRhtNuXCqwVcY3b6nNpaZ": "🍆 +$303",
     "KzxoVgkSDR7xXYKykbLmSBKMdwzGTesZS7Mc2iXkK9u": "📙 1",
     "8qX6LuKeDmR6FLg8HhmFxQHKhJbhx1zmRgoCk5RCmbk5": "🐧 366H",
-    "8PWPhnXh7P7bwoinAavyqsnU33H67x9wkRCxyAWibGD8": "🐽 ? -60%",
-    
-    # ТУТ ВАШІ 50 НОВИХ ГАМАНЦІВ...
-    "34ZEH778zL8ctkLwxxERLX5ZnUu6MuFyX9CWrs8kucMw": "⚓ 111к",
-    "CueDkwDYr8ZXRwMseprUpCqsz1Zj1VgLnZNRFyQHkfwZ": "7️⃣ 284Н",
-    "3in1nAQoJdnTZsYdmgVfJFLrRR1EoE3HVjyVnZVTMULV": "🦃 279К",
-    "HuP4RYp6ZRmhjikmbaHqzNwA71JoQ7oqQMHEZHUWQ4Rb": "⛱ 214",
-    "M5Q1hFKopMr2DyNabEkrgoh6tGaF6z6NVQZ5SGUPss8": "🪓 Wallet 159",
-    "DMqibTACAF4piJjA92Kuim7pxzuNGFizmuZ5KTtttnx8": "🥪 Sandwich/DEX",
-    "CdFHmaj37EtjgRqvyt6vZqoA9tuMSvKLSmbgpuV6ejaP": "💊 442H",
-    "F9meywQee74tqAKQvDb4Q9bon7y2XLNwUyFYUNEQUto9": "🏆 Top",
-    "2RssnB7hcrnBEx55hXMKT1E7gN27g9ecQFbbCc5Zjajq": "🥴 mostache",
-    "DiddyP7tSoS5e26zzy43QVfgTQ3dJ8ZyLibC3uPAAwQk": "🧙 DiddyP",
-    "FhLmFRG4iUAN48jXkuEc2fAz9E9ZUbZuW2my7g8TFvsC": "🛒 Wallet 110",
-    "ERgtHKpakjFBtcgrh4abzpqFCQKsMdM7QXdE1sfafrWU": "🏅 361Н",
-    "Gf9XgdmvNHt8fUTFsWAccNbKeyDXsgJyZN8iFJKg5Pbd": "🦓 10H",
-    "BZi5L1mCmVjXdUmeCRQWfKvuWqXakmRYQPFpmS559hD1": "⌛ 118Н",
-    "99i9uVA7Q56bY22ajKKUfTZTgTeP5yCtVGsrG9J4pDYQ": "🥺 Zrool",
-    "GjBhR6AY2h8d9rg3xrnQpSYRgK57eAnJs8agYFCkA1qM": "🍯 +$93.6K",
-    "87MZqjjJgpuFvaU8GyQJKbZGnCFFhX82qAjBGLRXPfcn": "🥁 Nyhrox",
-    "pndujwi7BeaRRenYHSShyNQXAdBNEzKDR5jgzbheJFT": "🍺 Unknown",
-    "Gq1RQQcvbZu9Ud2wVRy6Krh9RsS1ZYbLBsBuMuvCgyRU": "🌽 Corn",
-    "9ZzjXiwkGRDBwVHJitfx8AmnN2YUbnqW6M1tH38juEeJ": "🎉 NEW-321",
-    "9HCTuTPEiQvkUtLmTZvK6uch4E3pDynwJTbNw6jLhp9z": "🎡 Wallet 236",
-    "DgJxxRStmjsuK1EbPBuVuH7cd68XHKUNV33aeoUfS8ai": "🔍 364Н",
-    "HRFekhACsTUj9tRNHR8VfgBSYZp4BodaQwrqfpSePkMT": "👹 +$103K",
-    "HtucFepgUkMpHdrYsxMqjBNN6qVBdjmFaLZneNXopuJm": "🥵 Qaunt",
-    "J8fYZbmCnAL5WByigxqoum1disKUrZbsAmupfkXMvrmw": "🏁 Wallet 203",
-    "BiNp5o3D1NDX4U67wbdvq9nTZUmDoiMRMbNn4dJB2rP9": "🐹 365Н",
-    "C3nLTNMK6Ao1s3J1CQhv8GbT3NoMmifWoi9PGEcYd9hP": "👮 $57.7K",
-    "8fSnLTnRViK83dDesivTsPx2wiRhwti9xoafeMGjEyLJ": "🎗️ 27H",
-    "BC8yiFFQWFEKrEEj75zYsuK3ZDCfv6QEeMRif9oZZ9TW": "🥟 Dumpling",
-    "HEW8TmjdtJmAeMWZYG2pZd97FwZybtvJMkFjJmqMz64E": "⛸️ Skates",
-    "BHREKFkPQgAtDs8Vb1UfLkUpjG6ScidTjHaCWFuG2AtX": "🎺 Trumpet",
-    "9jyqFiLnruggwNn4EQwBNFXwpbLM9hrA4hV59ytyAVVz": "😁 NACH",
-    "xXpRSpAe1ajq4tJP78tS3X1AqNwJVQ4Vvb1Swg4hHQh": "🪀 aloh",
-    "GybhvUZzTq4qYBc292dz4HE4oQPZJGC9xGJdEH9uYeHK": "⛺ КИТ",
-    "9yYya3F5EJoLnBNKW6z4bZvyQytMXzDcpU5D6yYr4jqL": "🥕 loopierr",
-    "A4DCAjDwkq5jYhNoZ5Xn2NbkTLimARkerVv81w2dhXgL": "🛠️ Wallet 88",
-    "929fdCX5PbGr7rxrUb7GEyVbxka9WXszGkzHrnnCZ58m": "🔱 Trident",
-    "ApRnQN2HkbCn7W2WWiT2FEKvuKJp9LugRyAE1a9Hdz1": "🌐 S-Network",
-    "3ZsXXbXheMS2D6D6RRuJhERwh82aTgLy2JwFv6PRc4bM": "🍀 Clover",
-    "BtMBMPkoNbnLF9Xn552guQq528KKXcsNBNNBre3oaQtr": "🌠 NEW-210",
-    "3h65MmPZksoKKyEpEjnWU2Yk2iYT5oZDNitGy5cTaxoE": "🚢 Wallet 13",
-    "DKgvpfttzmJqZXdavDwTxwSVkajibjzJnN2FA99dyciK": "🦆 167H",
-    "FSvK6sxyLje1A8V7pbXWyroqyFmN41j5oseDCBHjTXL4": "🧢 NEW-305",
-    "8deJ9xeUvXSJwicYptA9mHsU2rN2pDx37KWzkDkEXhU6": "👷 Cooker",
-    "G1pRtSyKuWSjTqRDcazzKBDzqEF96i1xSURpiXj3yFcc": "🌺 87Н",
-    "286CHN57Km41GsAnDv866WKd6YB6HPSjFgF4rGDJTRLf": "🐼 NEW-50",
-    "6T8Yr9DUUS2R8GHevaeaZcoxA1Jku51ZBkmcM7NaZiNE": "🌭 306Н",
-    "4hSXPtxZgXFpo6Vxq9yqxNjcBoqWN3VoaPJWonUtupzD": "🐘 23Н",
-    "BH84Uo2YAnyWRUWeWyfFzttRmE51V682xUaD6NrLHM88": "🔑 100Н",
-    "GwyG5FQRNtY1faXYWdTLbcDNZTyW5d2Z63o1UiMUDQDT": "🥨 Pretzel"
+    "8PWPhnXh7P7bwoinAavyqsnU33H67x9wkRCxyAWibGD8": "🐽 ? -60%"
 }
 
-# ================= ФУНКЦІЇ =================
+# ================= HELPERS =================
 def short(addr): return f"{addr[:4]}...{addr[-4:]}"
 def emoji(w): return WALLET_EMOJI.get(w, "🔹")
 
@@ -243,40 +187,65 @@ def get_market(mint):
 def build_axiom(mint, pair):
     return f"https://axiom.trade/meme/{pair if pair else mint}?chain=sol"
 
-def send_to_bot(token, chat_id, text, url=None):
-    if not token or not chat_id: return None
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
-    if url: payload["reply_markup"] = {"inline_keyboard": [[{"text": "AXIOM", "url": url}]]}
-    try:
-        return requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=10)
-    except Exception as e:
-        logging.error(f"TG Error: {e}")
-        return None
+def send(text, url=None):
+    payload = {"chat_id":CHAT_ID,"text":text,"parse_mode":"HTML","disable_web_page_preview":True}
+    if url: payload["reply_markup"]={"inline_keyboard":[[{"text":"AXIOM","url":url}]]}
+    try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",json=payload,timeout=8)
+    except Exception as e: logging.error(f"TG Error: {e}")
 
-# ================= ДІАГНОСТИКА ПРИ ЗАПУСКУ =================
-def startup():
-    time.sleep(10)
-    logging.info("--- STARTING SYSTEM CHECK ---")
+# ================= CLEANER =================
+def cleanup_loop():
+    while True:
+        time.sleep(1800)
+        now = time.time()
+        with lock:
+            for sig in list(processed_signatures):
+                if now - processed_signatures[sig] > SIGNATURE_TTL:
+                    del processed_signatures[sig]
+            for k in list(wallet_agg):
+                if now - wallet_agg[k]["first_ts"] > 600:
+                    del wallet_agg[k]
+            for k in list(clusters):
+                if now - clusters[k]["first_ts"] > CLUSTER_LIFETIME + 3600:
+                    del clusters[k]
+                    sent_multi_count.pop(k, None)
+            for k in list(sent_ordinary):
+                if now - sent_ordinary[k] > CLUSTER_LIFETIME:
+                    del sent_ordinary[k]
+
+threading.Thread(target=cleanup_loop, daemon=True).start()
+
+# ================= DEBOUNCED SENDER (UPDATED) =================
+def delayed_ordinary_send(wallet, mint, key):
+    now = time.time()
+    with lock:
+        # ПЕРЕВІРКА: якщо для цього токена щойно був мульти-алерт (за останні 5 хв),
+        # то одиночний алерт НЕ надсилаємо
+        if mint in sent_multi_count:
+            last_multi_ts = sent_multi_count[mint].get("ts", 0)
+            if now - last_multi_ts < 300: # 5 хвилин "тиші" для одиночних
+                if key in wallet_agg: del wallet_agg[key]
+                return
+
+        if key not in wallet_agg: return
+        final_amt = wallet_agg[key]["amount"]
+        del wallet_agg[key]
+        sent_ordinary[key] = now
+
+    symbol = get_symbol(mint)
+    if any(x in symbol.upper() for x in STABLE_KEYWORDS): return
+
+    mc, pair = get_market(mint)
+    ax = build_axiom(mint, pair)
     
-    # ТЕСТ 1: Мульти-канал
-    res_m = send_to_bot(TOKEN_MULTI, CHAT_MULTI, "✅ СИСТЕМА: Multi-Bot підключено")
-    if res_m and res_m.status_code == 200:
-        logging.info("MULTI-BOT: OK")
-    else:
-        err = res_m.text if res_m else "No connection"
-        logging.error(f"MULTI-BOT ERROR: {err}")
+    txt = (f"🟢 <b>BUY {symbol}</b>\n\n"
+           f"{emoji(wallet)} {short(wallet)}\n"
+           f"└ <b>{final_amt:.2f} SOL</b> | MC {format_mc(mc)}\n"
+           f"Hold: 👊 {hold_percent(wallet, mint)}%\n\n"
+           f"<code>{mint}</code>")
+    send(txt, ax)
 
-    # ТЕСТ 2: Окремий Whale-канал
-    res_s = send_to_bot(TOKEN_SINGLE, CHAT_SINGLE, "✅ СИСТЕМА: Whale-Bot підключено")
-    if res_s and res_s.status_code == 200:
-        logging.info("SINGLE-BOT: OK")
-    else:
-        err = res_s.text if res_s else "No connection"
-        logging.error(f"SINGLE-BOT ERROR: {err}")
-
-threading.Thread(target=startup).start()
-
-# ================= WEBHOOK (ОБРОБКА ТРАНЗАКЦІЙ) =================
+# ================= WEBHOOK =================
 @app.route("/", methods=["POST"])
 def webhook():
     txs = request.json
@@ -292,7 +261,7 @@ def webhook():
             processed_signatures[sig] = now
 
         wallet = tx.get("feePayer")
-        if not wallet or wallet not in WALLET_EMOJI: continue
+        if not wallet: continue
 
         net_sol = 0
         for acc in tx.get("accountData", []):
@@ -300,38 +269,45 @@ def webhook():
                 net_sol = acc.get("nativeBalanceChange",0)/1e9
         
         sol_abs = abs(net_sol)
-        if sol_abs <= 0.05: continue
+        if sol_abs <= 0.005: continue
 
         bought_mint = None
+        seen_mints = set()
         for t in tx.get("tokenTransfers",[]):
             mint = t.get("mint")
-            if mint==SOL_MINT: continue
+            if mint==SOL_MINT or mint in seen_mints: continue
             if t.get("toUserAccount")==wallet:
                 with lock: ledger[(wallet,mint)]["buy"]+=sol_abs
                 bought_mint = mint
+                seen_mints.add(mint)
             elif t.get("fromUserAccount")==wallet:
                 with lock: ledger[(wallet,mint)]["sell"]+=sol_abs
+                seen_mints.add(mint)
 
         if not bought_mint: continue
+
         symbol = get_symbol(bought_mint)
         if any(x in symbol.upper() for x in STABLE_KEYWORDS): continue
 
-        # --- КИТИ (20+ SOL) - ЙДЕ В КАНАЛ SINGLE ---
-        if sol_abs >= MIN_BUY_SOL:
-            mc, pair = get_market(bought_mint)
-            ax_u = build_axiom(bought_mint, pair)
-            txt_w = (f"🐳 <b>WHALE BUY {symbol}</b>\n\n"
-                     f"{emoji(wallet)} {short(wallet)}\n"
-                     f"└ <b>{sol_abs:.2f} SOL</b> | MC {format_mc(mc)}\n"
-                     f"Hold: 👊 {hold_percent(wallet, bought_mint)}%\n\n"
-                     f"<code>{bought_mint}</code>")
-            send_to_bot(TOKEN_SINGLE, CHAT_SINGLE, txt_w, ax_u)
+        # --- ORDINARY BUY (DEBOUNCE) ---
+        key = (wallet, bought_mint)
+        with lock:
+            is_recent = key in sent_ordinary and now - sent_ordinary[key] < CLUSTER_LIFETIME
+            if not is_recent:
+                if key not in wallet_agg:
+                    wallet_agg[key] = {"amount": sol_abs, "first_ts": now, "timer_started": False}
+                else:
+                    wallet_agg[key]["amount"] += sol_abs
 
-        # --- MULTI BUY (3+ гаманці) - ЙДЕ В КАНАЛ MULTI ---
+                if wallet_agg[key]["amount"] >= MIN_BUY_SOL and not wallet_agg[key]["timer_started"]:
+                    wallet_agg[key]["timer_started"] = True
+                    threading.Timer(15.0, delayed_ordinary_send, args=[wallet, bought_mint, key]).start()
+
+        # --- MULTI BUY ---
         if sol_abs >= MULTI_MIN_SOL:
             with lock:
-                if bought_mint not in clusters or now - clusters[bought_mint]["first_ts"] > CLUSTER_LIFETIME:
-                    clusters[bought_mint] = {"wallets": {}, "total": 0.0, "first_ts": now}
+                if bought_mint not in clusters or now-clusters[bought_mint]["first_ts"]>CLUSTER_LIFETIME:
+                    clusters[bought_mint]={"wallets":{},"total":0.0,"first_ts":now}
                 
                 cl = clusters[bought_mint]
                 if wallet not in cl["wallets"]:
@@ -339,18 +315,23 @@ def webhook():
                     cl["total"] += sol_abs
                     w_count = len(cl["wallets"])
                     
-                    if w_count >= MULTI_MIN_WALLETS:
+                    last_sent_info = sent_multi_count.get(bought_mint, {"count": 0, "ts": 0})
+                    
+                    if w_count >= MULTI_MIN_WALLETS and w_count > last_sent_info["count"]:
+                        # Оновлюємо стан відправленого мульти-алерту
+                        sent_multi_count[bought_mint] = {"count": w_count, "ts": now}
                         snapshot = {"total": cl["total"], "wallets": cl["wallets"].copy()}
-                        def send_m(m, snap, count, sym):
-                            _, pr = get_market(m)
-                            ax_multi = build_axiom(m, pr)
-                            txt_m = f"‼️ 🟢 <b>MULTI BUY {sym}</b>\n\n{count} wallets | {snap['total']:.2f} SOL\n\n"
-                            for wal, amt in snap["wallets"].items():
-                                txt_m += f"{emoji(wal)} {short(wal)} — <b>{amt:.2f} SOL</b>\n"
-                            txt_m += f"\n<code>{m}</code>"
-                            send_to_bot(TOKEN_MULTI, CHAT_MULTI, txt_m, ax_multi)
                         
-                        threading.Thread(target=send_m, args=[bought_mint, snapshot, w_count, symbol]).start()
+                        def send_multi_delayed(m, snap, count, sym_name):
+                            mcap, pr = get_market(m)
+                            ax_url = build_axiom(m, pr)
+                            txt = f"‼️ 🟢 <b>MULTI BUY {sym_name}</b>\n\n{count} wallets | {snap['total']:.2f} SOL\n\n"
+                            for w, amt in snap["wallets"].items():
+                                txt += f"{emoji(w)} {short(w)} — <b>{amt:.2f} SOL</b> 👊 {hold_percent(w, m)}%\n"
+                            txt += f"\n<code>{m}</code>"
+                            send(txt, ax_url)
+                        
+                        threading.Thread(target=send_multi_delayed, args=[bought_mint, snapshot, w_count, symbol]).start()
 
     return jsonify(ok=True)
 
