@@ -7,17 +7,23 @@ from flask import Flask, request, jsonify
 from collections import defaultdict
 from functools import lru_cache
 
-# Налаштування логів для відстеження помилок у Render
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
-# ================= CONFIG (Render Environment Variables) =================
+# ================= CONFIG (НАЛАШТУВАННЯ) =================
+
+# 1. ТОКЕН БОТА (береться з BotFather)
 TOKEN_MULTI = os.getenv("TOKEN_MULTI")
-CHAT_MULTI = os.getenv("CHAT_MULTI")
 TOKEN_SINGLE = os.getenv("TOKEN_SINGLE")
+
+# 2. ID КАНАЛІВ (мають починатися на -100...)
+CHAT_MULTI = os.getenv("CHAT_MULTI")
 CHAT_SINGLE = os.getenv("CHAT_SINGLE")
 
-# Якщо змінні не задані, бот не зможе працювати
+# --- ЗАХИСТ: Якщо SINGLE не налаштований, використовуємо дані MULTI ---
+if not TOKEN_SINGLE: TOKEN_SINGLE = TOKEN_MULTI
+if not CHAT_SINGLE: CHAT_SINGLE = CHAT_MULTI
+
 MIN_BUY_SOL = 20.0  
 MULTI_MIN_SOL = 5.0 
 MULTI_MIN_WALLETS = 3
@@ -32,8 +38,9 @@ sent_multi_count = {}
 processed_signatures = {}
 lock = threading.Lock()
 
-# ================= WALLET DATABASE (164 ADDRESSES) =================
+# ================= БАЗА ГАМАНЦІВ (164 шт) =================
 WALLET_EMOJI = {
+    # ТУТ ВАШІ 114 СТАРИХ ГАМАНЦІВ...
     "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o": "👽 kentes",
     "5h7yzwmrGoG2BmxNCqNR2EnSv1LWCFo7n6SKSh5ZWkfE": "🖌 307H",
     "4CqecFud362LKgALvChyhj6276he3Sy8yKim1uvFNV1m": "🥴 182 H",
@@ -148,6 +155,8 @@ WALLET_EMOJI = {
     "KzxoVgkSDR7xXYKykbLmSBKMdwzGTesZS7Mc2iXkK9u": "📙 1",
     "8qX6LuKeDmR6FLg8HhmFxQHKhJbhx1zmRgoCk5RCmbk5": "🐧 366H",
     "8PWPhnXh7P7bwoinAavyqsnU33H67x9wkRCxyAWibGD8": "🐽 ? -60%",
+    
+    # ТУТ ВАШІ 50 НОВИХ ГАМАНЦІВ...
     "34ZEH778zL8ctkLwxxERLX5ZnUu6MuFyX9CWrs8kucMw": "⚓ 111к",
     "CueDkwDYr8ZXRwMseprUpCqsz1Zj1VgLnZNRFyQHkfwZ": "7️⃣ 284Н",
     "3in1nAQoJdnTZsYdmgVfJFLrRR1EoE3HVjyVnZVTMULV": "🦃 279К",
@@ -200,7 +209,7 @@ WALLET_EMOJI = {
     "GwyG5FQRNtY1faXYWdTLbcDNZTyW5d2Z63o1UiMUDQDT": "🥨 Pretzel"
 }
 
-# ================= HELPERS =================
+# ================= ФУНКЦІЇ =================
 def short(addr): return f"{addr[:4]}...{addr[-4:]}"
 def emoji(w): return WALLET_EMOJI.get(w, "🔹")
 
@@ -235,38 +244,39 @@ def build_axiom(mint, pair):
     return f"https://axiom.trade/meme/{pair if pair else mint}?chain=sol"
 
 def send_to_bot(token, chat_id, text, url=None):
-    if not token or not chat_id: return
+    if not token or not chat_id: return None
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
     if url: payload["reply_markup"] = {"inline_keyboard": [[{"text": "AXIOM", "url": url}]]}
     try:
-        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=8)
-        return r
+        return requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=10)
     except Exception as e:
         logging.error(f"TG Error: {e}")
         return None
 
-# ================= STARTUP DIAGNOSTICS =================
+# ================= ДІАГНОСТИКА ПРИ ЗАПУСКУ =================
 def startup():
     time.sleep(10)
     logging.info("--- STARTING SYSTEM CHECK ---")
     
-    # Перевірка мульти-бота
-    res_m = send_to_bot(TOKEN_MULTI, CHAT_MULTI, "✅ Multi-Bot підключено")
+    # ТЕСТ 1: Мульти-канал
+    res_m = send_to_bot(TOKEN_MULTI, CHAT_MULTI, "✅ СИСТЕМА: Multi-Bot підключено")
     if res_m and res_m.status_code == 200:
         logging.info("MULTI-BOT: OK")
     else:
-        logging.error(f"MULTI-BOT ERROR: {res_m.text if res_m else 'No response'}")
+        err = res_m.text if res_m else "No connection"
+        logging.error(f"MULTI-BOT ERROR: {err}")
 
-    # Перевірка одиночного (ординарного) бота
-    res_s = send_to_bot(TOKEN_SINGLE, CHAT_SINGLE, "✅ Whale-Bot (Ординарний) підключено")
+    # ТЕСТ 2: Окремий Whale-канал
+    res_s = send_to_bot(TOKEN_SINGLE, CHAT_SINGLE, "✅ СИСТЕМА: Whale-Bot підключено")
     if res_s and res_s.status_code == 200:
         logging.info("SINGLE-BOT: OK")
     else:
-        logging.error(f"SINGLE-BOT ERROR: {res_s.text if res_s else 'No response'}")
+        err = res_s.text if res_s else "No connection"
+        logging.error(f"SINGLE-BOT ERROR: {err}")
 
 threading.Thread(target=startup).start()
 
-# ================= WEBHOOK =================
+# ================= WEBHOOK (ОБРОБКА ТРАНЗАКЦІЙ) =================
 @app.route("/", methods=["POST"])
 def webhook():
     txs = request.json
@@ -282,7 +292,7 @@ def webhook():
             processed_signatures[sig] = now
 
         wallet = tx.get("feePayer")
-        if not wallet: continue
+        if not wallet or wallet not in WALLET_EMOJI: continue
 
         net_sol = 0
         for acc in tx.get("accountData", []):
@@ -306,7 +316,7 @@ def webhook():
         symbol = get_symbol(bought_mint)
         if any(x in symbol.upper() for x in STABLE_KEYWORDS): continue
 
-        # --- WHALES (20+ SOL) ---
+        # --- КИТИ (20+ SOL) - ЙДЕ В КАНАЛ SINGLE ---
         if sol_abs >= MIN_BUY_SOL:
             mc, pair = get_market(bought_mint)
             ax_u = build_axiom(bought_mint, pair)
@@ -317,7 +327,7 @@ def webhook():
                      f"<code>{bought_mint}</code>")
             send_to_bot(TOKEN_SINGLE, CHAT_SINGLE, txt_w, ax_u)
 
-        # --- MULTI BUY ---
+        # --- MULTI BUY (3+ гаманці) - ЙДЕ В КАНАЛ MULTI ---
         if sol_abs >= MULTI_MIN_SOL:
             with lock:
                 if bought_mint not in clusters or now - clusters[bought_mint]["first_ts"] > CLUSTER_LIFETIME:
@@ -329,11 +339,8 @@ def webhook():
                     cl["total"] += sol_abs
                     w_count = len(cl["wallets"])
                     
-                    last_sent = sent_multi_count.get(bought_mint, {"count": 0})["count"]
-                    if w_count >= MULTI_MIN_WALLETS and w_count > last_sent:
-                        sent_multi_count[bought_mint] = {"count": w_count, "ts": now}
+                    if w_count >= MULTI_MIN_WALLETS:
                         snapshot = {"total": cl["total"], "wallets": cl["wallets"].copy()}
-                        
                         def send_m(m, snap, count, sym):
                             _, pr = get_market(m)
                             ax_multi = build_axiom(m, pr)
