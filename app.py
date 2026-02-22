@@ -29,12 +29,12 @@ wallet_agg = {}
 clusters = {}
 ledger = defaultdict(lambda: {"buy": 0.0, "sell": 0.0})
 sent_ordinary = {}
-sent_multi_count = {} # Тут зберігаємо час останнього мульти-алерту для токена
+sent_multi_count = {} 
 processed_signatures = {}
 
 lock = threading.Lock()
 
-# ================= WALLET EMOJI =================
+# ================= WALLET EMOJI (Твоя база) =================
 WALLET_EMOJI = {
     "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o": "👽 kentes",
     "5h7yzwmrGoG2BmxNCqNR2EnSv1LWCFo7n6SKSh5ZWkfE": "🖌 307H",
@@ -69,7 +69,6 @@ WALLET_EMOJI = {
     "AeLaMjzxErZt4drbWVWvcxpVyo8p94xu5vrg41eZPFe3": "😡 simle",
     "GrXjXop95XkVPYJafDJNCLFzK9K8LkpopxYcgUUn2H87": "🦁 NEW-189",
     "mW4PZB45isHmnjGkLpJvjKBzVS5NXzTJ8UDyug4gTsM": "🐺 igndex",
-    "XXXXXahGswEH6i3Czn19XbGxQrobJoY1TYJegPxp3ex": "Parrot +$73.1к",
     "JDd3hy3gQn2V982mi1zqhNqUw1GfV2UL6g76STojCJPN": "🍃 WEST",
     "EzbeF2bADKo6GutJyWmgodyGJFeBPhcrXSdZUXPX5WGc": "🍍 254Н",
     "53BnNc49Ajgstciq3CRoyxuBpkkW1r8pgPyvr7JGYnsh": "👾 Monki",
@@ -190,8 +189,10 @@ def build_axiom(mint, pair):
 def send(text, url=None):
     payload = {"chat_id":CHAT_ID,"text":text,"parse_mode":"HTML","disable_web_page_preview":True}
     if url: payload["reply_markup"]={"inline_keyboard":[[{"text":"AXIOM","url":url}]]}
-    try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",json=payload,timeout=8)
-    except Exception as e: logging.error(f"TG Error: {e}")
+    try: 
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",json=payload,timeout=8)
+    except Exception as e: 
+        logging.error(f"TG Error: {e}")
 
 # ================= CLEANER =================
 def cleanup_loop():
@@ -215,15 +216,13 @@ def cleanup_loop():
 
 threading.Thread(target=cleanup_loop, daemon=True).start()
 
-# ================= DEBOUNCED SENDER (UPDATED) =================
+# ================= DEBOUNCED SENDER =================
 def delayed_ordinary_send(wallet, mint, key):
     now = time.time()
     with lock:
-        # ПЕРЕВІРКА: якщо для цього токена щойно був мульти-алерт (за останні 5 хв),
-        # то одиночний алерт НЕ надсилаємо
         if mint in sent_multi_count:
             last_multi_ts = sent_multi_count[mint].get("ts", 0)
-            if now - last_multi_ts < 300: # 5 хвилин "тиші" для одиночних
+            if now - last_multi_ts < 300: 
                 if key in wallet_agg: del wallet_agg[key]
                 return
 
@@ -261,7 +260,7 @@ def webhook():
             processed_signatures[sig] = now
 
         wallet = tx.get("feePayer")
-        if not wallet: continue
+        if not wallet or wallet not in WALLET_EMOJI: continue
 
         net_sol = 0
         for acc in tx.get("accountData", []):
@@ -318,7 +317,6 @@ def webhook():
                     last_sent_info = sent_multi_count.get(bought_mint, {"count": 0, "ts": 0})
                     
                     if w_count >= MULTI_MIN_WALLETS and w_count > last_sent_info["count"]:
-                        # Оновлюємо стан відправленого мульти-алерту
                         sent_multi_count[bought_mint] = {"count": w_count, "ts": now}
                         snapshot = {"total": cl["total"], "wallets": cl["wallets"].copy()}
                         
