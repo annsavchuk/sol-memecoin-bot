@@ -21,7 +21,8 @@ AGG_WINDOW = 60
 CLUSTER_LIFETIME = 6 * 3600
 SIGNATURE_TTL = 600
 
-STABLE_KEYWORDS = ["USD", "USDT", "USDC", "SOL", "DAI", "WSOL"]
+# Тільки точний збіг для системних токенів
+STABLE_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT", "DAI", "USD", "SOLANA"}
 SOL_MINT = "So11111111111111111111111111111111111111112"
 
 # ================= STATE =================
@@ -34,8 +35,9 @@ processed_signatures = {}
 
 lock = threading.Lock()
 
-# ================= WALLET EMOJI (Твоя база) =================
+# ================= WALLET EMOJI (Тільки для іменування) =================
 WALLET_EMOJI = {
+    "BC8yiFFQWFEKrEEj75zYsuK3ZDCfv6QEeMRif9oZZ9TW": "🐋 Новий Кит",
     "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o": "👽 kentes",
     "5h7yzwmrGoG2BmxNCqNR2EnSv1LWCFo7n6SKSh5ZWkfE": "🖌 307H",
     "4CqecFud362LKgALvChyhj6276he3Sy8yKim1uvFNV1m": "🥴 182 H",
@@ -154,7 +156,9 @@ WALLET_EMOJI = {
 
 # ================= HELPERS =================
 def short(addr): return f"{addr[:4]}...{addr[-4:]}"
-def emoji(w): return WALLET_EMOJI.get(w, "🔹")
+def emoji(w): 
+    # Якщо гаманця немає в списку, повертаємо дефолтний значок
+    return WALLET_EMOJI.get(w, f"🔹 {short(w)}")
 
 def hold_percent(wallet, mint):
     with lock:
@@ -232,13 +236,13 @@ def delayed_ordinary_send(wallet, mint, key):
         sent_ordinary[key] = now
 
     symbol = get_symbol(mint)
-    if any(x in symbol.upper() for x in STABLE_KEYWORDS): return
+    if symbol.upper() in STABLE_SYMBOLS: return
 
     mc, pair = get_market(mint)
     ax = build_axiom(mint, pair)
     
     txt = (f"🟢 <b>BUY {symbol}</b>\n\n"
-           f"{emoji(wallet)} {short(wallet)}\n"
+           f"{emoji(wallet)}\n"
            f"└ <b>{final_amt:.2f} SOL</b> | MC {format_mc(mc)}\n"
            f"Hold: 👊 {hold_percent(wallet, mint)}%\n\n"
            f"<code>{mint}</code>")
@@ -260,7 +264,8 @@ def webhook():
             processed_signatures[sig] = now
 
         wallet = tx.get("feePayer")
-        if not wallet or wallet not in WALLET_EMOJI: continue
+        # ТЕПЕР ПРИЙМАЄМО ВСІ ГАМАНЦІ ВІД HELIOS
+        if not wallet: continue 
 
         net_sol = 0
         for acc in tx.get("accountData", []):
@@ -286,7 +291,7 @@ def webhook():
         if not bought_mint: continue
 
         symbol = get_symbol(bought_mint)
-        if any(x in symbol.upper() for x in STABLE_KEYWORDS): continue
+        if symbol.upper() in STABLE_SYMBOLS: continue
 
         # --- ORDINARY BUY (DEBOUNCE) ---
         key = (wallet, bought_mint)
@@ -325,7 +330,7 @@ def webhook():
                             ax_url = build_axiom(m, pr)
                             txt = f"‼️ 🟢 <b>MULTI BUY {sym_name}</b>\n\n{count} wallets | {snap['total']:.2f} SOL\n\n"
                             for w, amt in snap["wallets"].items():
-                                txt += f"{emoji(w)} {short(w)} — <b>{amt:.2f} SOL</b> 👊 {hold_percent(w, m)}%\n"
+                                txt += f"{emoji(w)} — <b>{amt:.2f} SOL</b> 👊 {hold_percent(w, m)}%\n"
                             txt += f"\n<code>{m}</code>"
                             send(txt, ax_url)
                         
