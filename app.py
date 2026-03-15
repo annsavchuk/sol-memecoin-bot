@@ -21,7 +21,6 @@ AGG_WINDOW = 60
 CLUSTER_LIFETIME = 6 * 3600
 SIGNATURE_TTL = 600
 
-# Тільки точний збіг для системних токенів
 STABLE_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT", "DAI", "USD", "SOLANA"}
 SOL_MINT = "So11111111111111111111111111111111111111112"
 
@@ -35,8 +34,8 @@ processed_signatures = {}
 
 lock = threading.Lock()
 
-# ================= WALLET EMOJI (Тільки для іменування) =================
-    WALLET_EMOJI = {
+# ================= WALLET EMOJI =================
+WALLET_EMOJI = {
     # --- ПЕРША ГРУПА ---
     "BiNp5o3D1NDX4U67wbdvq9nTZUmDoiMRMbNn4dJB2rP9": "🐹 365Н",
     "C3nLTNMK6Ao1s3J1CQhv8GbT3NoMmifWoi9PGEcYd9hP": "👮 +$57.7K?",
@@ -63,8 +62,6 @@ lock = threading.Lock()
     "4hSXPtxZgXFpo6Vxq9yqxNjcBoqWN3VoaPJWonUtupzD": "🐘 23Н",
     "BH84Uo2YAnyWRUWeWyfFzttRmE51V682xUaD6NrLHM88": "🔑 100Н",
     "GwyG5FQRNtY1faXYWdTLbcDNZTyW5d2Z63o1UiMUDQDT": "🥨?",
-
-    # --- ДРУГА ГРУПА ---
     "34ZEH778zL8ctkLwxxERLX5ZnUu6MuFyX9CWrs8kucMw": "⚓ 111к",
     "CueDkwDYr8ZXRwMseprUpCqsz1Zj1VgLnZNRFyQHkfwZ": "7⃣ 284Н",
     "3in1nAQoJdnTZsYdmgVfJFLrRR1EoE3HVjyVnZVTMULV": "🦃 279К",
@@ -90,8 +87,6 @@ lock = threading.Lock()
     "HRFekhACsTUj9tRNHR8VfgBSYZp4BodaQwrqfpSePkMT": "👹 +$103K",
     "HtucFepgUkMpHdrYsxMqjBNN6qVBdjmFaLZneNXopuJm": "🥵 Qaunt",
     "J8fYZbmCnAL5WByigxqoum1disKUrZbsAmupfkXMvrmw": "🏁 Wallet 203",
-
-    # --- ТРЕТЯ ГРУПА ---
     "CDNt6H6J7ZBWVjyKJmFRjcJAoHa6XKrn2mTLK3DZwnqL": "🥐 +$86.4K",
     "4Degk564qYYcK4hDZikpNcuS4jNgcGH8PGcJuhgJdPoY": "🦠 new-3",
     "7ABz8qEFZTHPkovMDsmQkm64DZWN5wRtU7LEtD2ShkQ6": "🔴 red",
@@ -117,8 +112,6 @@ lock = threading.Lock()
     "KzxoVgkSDR7xXYKykbLmSBKMdwzGTesZS7Mc2iXkK9u": "📙 1",
     "8qX6LuKeDmR6FLg8HhmFxQHKhJbhx1zmRgoCk5RCmbk5": "🐧 366H",
     "8PWPhnXh7P7bwoinAavyqsnU33H67x9wkRCxyAWibGD8": "🐽 ? -60%",
-
-    # --- ЧЕТВЕРТА ГРУПА ---
     "8eioZubsRjFkNEFcSHKDbWa8MkpmXMBvQcfarGsLviuE": "🍔 +90к",
     "BKT1dCmc72rpsMExWooyTNqs2Qh6MeYMYX68B7JjqdLN": "🪕 +78К",
     "BXAWg4JbaeyvAHpiyYQ3Xr3bUh6FsyDHwwSkB5dmyGF": "👺 ?",
@@ -144,8 +137,6 @@ lock = threading.Lock()
     "3tc4BVAdzjr1JpeZu6NAjLHyp4kK3iic7TexMBYGJ4Xk": "🤡 gnf",
     "FvPEk72M6Lp78idz5fbgXZijvaRPgXJGkkJs21hBSWJD": "🧩 +50k",
     "AJ6MGExeK7FXmeKkKPmALjcdXVStXYokYNv9uVfDRtvo": "🦝 TIM",
-
-    # --- П'ЯТА ГРУПА ---
     "EQKeA12n4hvs4GhHmdcTMUSkUDF3aurw6zjLXogsw7Sk": "🥥 +$91к",
     "9WyrxBxc6kf8fq1UfmTTtCC7UfBmEGhQkDuWjxoHfvb7": "🚜 346Н",
     "Fh3kfdQGDwzpiiME3X3h6dsbayd3ufrfP3GrdmJ7LKJT": "🗜 +$41.2к",
@@ -162,7 +153,7 @@ lock = threading.Lock()
     "FRa5xvWrvgYBHEukozdhJPCJRuJZcTn2WKj2u6L75Rmj": "📨 206H",
     "BLhQ4fWgkNAJ4MWXSdXaTnxwZxwHh7QTnMQb6i3Z2QYy": "🌙 90Н",
     "63oQYEauMBFyaGQ69CNkwXFzCvdkFxdPaxGKYx72Tedb": "🎉 120Н",
-    "2HpvvY7TcbSdr8uNrDBUyEvbD9mcjg4ssmWQFcQcwJap": "FOX NEW-199",
+    "2HpvvY7TcbSdr8uNrDBUyEvbD9mcjg4ssmWQFcQcwJap": "🦊 NEW-199",
     "DsqRyTUh1R37asYcVf1KdX4CNnz5DKEFmnXvgT4NfTPE": "🍗 Classic",
     "EPFDmjJKBX1JrHHpzWRﬀZQv6jeZuo6o3g6FoeKJG5Ha": "🐆 447Н",
     "5owZXjEe27wZTRevqRUETwia3EctJiaYtKhpqmPzWHuj": "🎨 +$90.8к",
@@ -171,8 +162,6 @@ lock = threading.Lock()
     "7SDs3PjT2mswKQ7Zo4FTucn9gJdtuW4jaacPA65BseHS": "😀 Insentos",
     "CW6XezzEftYw4aALKo96x6oudqBZ3sfVXrfF23hAezdX": "🦴 295H",
     "EJvokC7vFEubsdEmJX3do1FgfwdUSDYZKGVa5MMs2isA": "🍄 +40к",
-
-    # --- ШОСТА ГРУПА ---
     "4gLZztSiwUnQtbqzc6sJrTjfgA5RCweHgokiLgEWPn3u": "🦍 +$168К",
     "8rvAsDKeAcEjEkiZMug9k8v1y8mW6gQQiMobd89Uy7qR": "🎰 casino",
     "DNfuF1L62WWyW3pNakVkyGGFzVVhj4Yr52jSmdTyeBHm": "🦩 gake",
@@ -198,8 +187,6 @@ lock = threading.Lock()
     "4SbDMrX8Zfj7qZtRKTBSQEavPkc7BP1kiJfT2f3dn8RL": "🦈 АКУЛА",
     "8MaVa9kdt3NW4Q5HyNMm1X5LbR8PQRVDc1W8NMVK88D5": "🏖 Daumen",
     "CLegS2MSiCsBksVazCg4Y7Gz3NqeBK21QyvzK4Q7S168": "🐝 NEW-13",
-
-    # --- СЬОМА ГРУПА ---
     "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o": "👽 kentes",
     "5h7yzwmrGoG2BmxNCqNR2EnSv1LWCFo7n6SKSh5ZWkfE": "🖌 307H",
     "4CqecFud362LKgALvChyhj6276he3Sy8yKim1uvFNV1m": "🥴 182 H",
@@ -229,8 +216,8 @@ lock = threading.Lock()
 
 # ================= HELPERS =================
 def short(addr): return f"{addr[:4]}...{addr[-4:]}"
+
 def emoji(w): 
-    # Якщо гаманця немає в списку, повертаємо дефолтний значок
     return WALLET_EMOJI.get(w, f"🔹 {short(w)}")
 
 def hold_percent(wallet, mint):
@@ -337,7 +324,6 @@ def webhook():
             processed_signatures[sig] = now
 
         wallet = tx.get("feePayer")
-        # ТЕПЕР ПРИЙМАЄМО ВСІ ГАМАНЦІ ВІД HELIOS
         if not wallet: continue 
 
         net_sol = 0
@@ -366,7 +352,6 @@ def webhook():
         symbol = get_symbol(bought_mint)
         if symbol.upper() in STABLE_SYMBOLS: continue
 
-        # --- ORDINARY BUY (DEBOUNCE) ---
         key = (wallet, bought_mint)
         with lock:
             is_recent = key in sent_ordinary and now - sent_ordinary[key] < CLUSTER_LIFETIME
@@ -380,7 +365,6 @@ def webhook():
                     wallet_agg[key]["timer_started"] = True
                     threading.Timer(15.0, delayed_ordinary_send, args=[wallet, bought_mint, key]).start()
 
-        # --- MULTI BUY ---
         if sol_abs >= MULTI_MIN_SOL:
             with lock:
                 if bought_mint not in clusters or now-clusters[bought_mint]["first_ts"]>CLUSTER_LIFETIME:
