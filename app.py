@@ -5,53 +5,61 @@ import threading
 import logging
 from flask import Flask, request, jsonify
 from collections import defaultdict
+
 logging.basicConfig(
-level=logging.INFO,
-format="%(asctime)s [%(levelname)s] %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
 )
 app = Flask(__name__)
+
 # ================= CONFIG =================
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-MIN_BUY_SOL = 5
-MULTI_MIN_SOL = 5
+CHAT_ID        = os.getenv("CHAT_ID")
+
+MIN_BUY_SOL       = 5
+MULTI_MIN_SOL     = 5
 MULTI_MIN_WALLETS = 3
-CLUSTER_LIFETIME = 6 * 3600
-SIGNATURE_TTL = 600
-STABLE_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT", "DAI", "USD", "SOLANA"}
+CLUSTER_LIFETIME  = 6 * 3600
+SIGNATURE_TTL     = 600
+
+# Фільтр за ключовими словами (ігнорує все, що містить ці підрядки, наприклад USD1)
+BAD_KEYWORDS = {"USD", "SOL", "DAI", "MEME", "TEST", "WSOL", "USDC", "USDT"}
+
 STABLE_MINTS = {
-"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-"Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
-"7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
-"So11111111111111111111111111111111111111112",
-"mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
-"7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj",
-"bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
+    "So11111111111111111111111111111111111111112",
+    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
+    "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj",
+    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",
 }
+
 SOL_MINT = "So11111111111111111111111111111111111111112"
+
 # ================= STATE =================
-wallet_agg = {}
-# clusters[mint] = {
-# "wallets": { addr: {"amt": float, "ts": float} },
-# "total": float,
-# "first_ts": float,
-# "sym": str
-# }
-clusters = {}
-ledger sent_ordinary = {}
-# sent_multi[mint] = {"count": int, "ts": float}
-sent_multi = {}
+
+wallet_agg           = {}
+clusters             = {}
+ledger               = defaultdict(lambda: {"buy": 0.0, "sell": 0.0, "last_ts": 0.0})
+sent_ordinary        = {}
+sent_multi           = {}
 processed_signatures = {}
-= defaultdict(lambda: {"buy": 0.0, "sell": 0.0, "last_ts": 0.0})
+
 lock = threading.Lock()
+
 # ================= CACHES =================
+
 symbol_cache = {}
 market_cache = {}
-SYMBOL_TTL = 3600
-MARKET_TTL = 30
+SYMBOL_TTL   = 3600
+MARKET_TTL   = 30
+
 # ================= WALLET EMOJI =================
+# (Я залишив список порожнім для компактності, встав сюди свої 300 гаманців)
 WALLET_EMOJI = {
-"BiNp5o3D1NDX4U67wbdvq9nTZUmDoiMRMbNn4dJB2rP9": "🐹 365Н",
+    "BiNp5o3D1NDX4U67wbdvq9nTZUmDoiMRMbNn4dJB2rP9": "🐹 365Н",
     "C3nLTNMK6Ao1s3J1CQhv8GbT3NoMmifWoi9PGEcYd9hP": "👮 +$57.7K?",
     "8fSnLTnRViK83dDesivTsPx2wiRhwti9xoafeMGjEyLJ": "🎗️ 27H",
     "BC8yiFFQWFEKrEEj75zYsuK3ZDCfv6QEeMRif9oZZ9TW": "🥟 ?",
@@ -227,320 +235,265 @@ WALLET_EMOJI = {
     "DP7G43VPwR5Ab5rcjrCnvJ8UgvRXRHTWscMjRD1eSdGC": "🛷 362 H",
     "BQVz7fQ1WsQmSTMY3umdPEPPTm1sdcBcX9sP7o6kPRmB": "🦀 +41.9K"
 }
+
 # ================= HELPERS =================
+
 def short(addr): return f"{addr[:4]}...{addr[-4:]}"
+
 def emoji(w):
-return WALLET_EMOJI.get(w, f" {short(w)}")
+    return WALLET_EMOJI.get(w, f"🔹 {short(w)}")
+
 def hold_percent(wallet, mint):
-with lock:
-b = ledger[(wallet, mint)]["buy"]
-s = ledger[(wallet, mint)]["sell"]
-if b <= 0: return 0
-return max(0, int(((b - s) / b) * 100))
+    with lock:
+        b = ledger[(wallet, mint)]["buy"]
+        s = ledger[(wallet, mint)]["sell"]
+    if b <= 0: return 0
+    return max(0, int(((b - s) / b) * 100))
+
 def status_icon(pct):
-""" тримає все | частково продав | вийшов повністю"""
-if pct >= 100: return " "
-if pct <= 0: return " "
-return " "
+    if pct >= 100: return "🔷"
+    if pct <= 0:   return "🔺"
+    return "🔶"
+
 def format_mc(mc):
-if not mc: return "N/A"
-return f"${mc/1_000_000:.2f}M" if mc >= 1_000_000 else f"${mc/1000:.1f}K"
+    if not mc: return "N/A"
+    return f"${mc/1_000_000:.2f}M" if mc >= 1_000_000 else f"${mc/1000:.1f}K"
+
 def tx_age_str(ts):
-diff = int(time.time() - ts)
-if diff < 60: return f"{diff}s tx"
-if diff < 3600: return f"{diff//60}m tx"
-return f"{diff//3600}h tx"
+    diff = int(time.time() - ts)
+    if diff < 60:   return f"{diff}s tx"
+    if diff < 3600: return f"{diff//60}m tx"
+    return f"{diff//3600}h tx"
+
 def seen_str(first_ts):
-diff = int(time.time() - first_ts)
-if diff < 60: return "<1m"
-if diff < 3600: return f"{diff//60}m"
-return f"{diff//3600}h"
-# ================= SYMBOL CACHE =================
+    diff = int(time.time() - first_ts)
+    if diff < 60:   return "<1m"
+    if diff < 3600: return f"{diff//60}m"
+    return f"{diff//3600}h"
+
+def is_blacklisted(symbol, mint):
+    if mint in STABLE_MINTS: return True
+    s_up = symbol.upper()
+    return any(kw in s_up for kw in BAD_KEYWORDS)
+
+# ================= API CALLS =================
+
 def get_symbol(mint):
-now = time.time()
-if mint in symbol_cache:
-sym, ts = symbol_cache[mint]
-if now - ts < SYMBOL_TTL:
-return sym
-try:
-r = requests.get(
-f"https://api.dexscreener.com/latest/dex/tokens/{mint}",
-timeout=5
-).json()
-if r.get("pairs"):
-sym = r["pairs"][0]["baseToken"]["symbol"]
-symbol_cache[mint] = (sym, now)
-return sym
-except Exception as e:
-logging.warning(f"get_symbol error {mint[:8]}: {e}")
-return mint[:6]
-# ================= MARKET CACHE =================
+    now = time.time()
+    if mint in symbol_cache:
+        sym, ts = symbol_cache[mint]
+        if now - ts < SYMBOL_TTL: return sym
+    try:
+        r = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}", timeout=5).json()
+        if r.get("pairs"):
+            sym = r["pairs"][0]["baseToken"]["symbol"]
+            symbol_cache[mint] = (sym, now)
+            return sym
+    except: pass
+    return mint[:6]
+
 def get_market(mint):
-now = time.time()
-if mint in market_cache:
-mc, pair, ts = market_cache[mint]
-if now - ts < MARKET_TTL:
-return mc, pair
-try:
-r = requests.get(
-f"https://api.dexscreener.com/latest/dex/tokens/{mint}",
-timeout=5
-).json()
-if not r.get("pairs"):
-return 0, None
-p = next(
-(x for x in r["pairs"] if x.get("chainId") == "solana"),
-r["pairs"][0]
-)
-mc = p.get("fdv", 0)
-pair = p.get("pairAddress")
-market_cache[mint] = (mc, pair, now)
-return mc, pair
-except Exception as e:
-logging.warning(f"get_market error {mint[:8]}: {e}")
-return 0, None
+    now = time.time()
+    if mint in market_cache:
+        mc, pair, ts = market_cache[mint]
+        if now - ts < MARKET_TTL: return mc, pair
+    try:
+        r = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}", timeout=5).json()
+        if not r.get("pairs"): return 0, None
+        p = next((x for x in r["pairs"] if x.get("chainId") == "solana"), r["pairs"][0])
+        mc, pair = p.get("fdv", 0), p.get("pairAddress")
+        market_cache[mint] = (mc, pair, now)
+        return mc, pair
+    except: return 0, None
+
 def get_market_with_retry(mint, retries=2, delay=2):
-for attempt in range(retries):
-mc, pair = get_market(mint)
-if mc > 0:
-return mc, pair
-if attempt < retries - 1:
-time.sleep(delay)
-return 0, None
+    for attempt in range(retries):
+        mc, pair = get_market(mint)
+        if mc > 0: return mc, pair
+        if attempt < retries - 1: time.sleep(delay)
+    return 0, None
+
 def build_axiom(mint, pair):
-return f"https://axiom.trade/meme/{pair if pair else mint}?chain=sol"
-# ================= TELEGRAM SEND =================
+    return f"https://axiom.trade/meme/{pair if pair else mint}?chain=sol"
+
 def send(text, url=None):
-payload = {
-"chat_id": CHAT_ID,
-"text": text,
-"parse_mode": "HTML",
-"disable_web_page_preview": True
-}
-if url:
-payload["reply_markup"] = {"inline_keyboard": [[{"text": "AXIOM", "url": url}]]}
-try:
-requests.post(
-f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-json=payload, timeout=8
-)
-except Exception as e:
-logging.error(f"TG send error: {e}")
+    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    if url: payload["reply_markup"] = {"inline_keyboard": [[{"text": "AXIOM", "url": url}]]}
+    try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json=payload, timeout=8)
+    except Exception as e: logging.error(f"TG error: {e}")
+
 # ================= BUILD MULTI TEXT =================
+
 def build_multi_text(mint, cl, mcap, sym_name):
-"""
-Будує текст multi-алерту з актуальними даними всіх гаманців.
-Формат як у Memescope:
-/ / EmojiName (Xs tx)
-├ X.XX SOL | MC $XXX
-└ Total buy: X.XX SOL | XX%
-"""
-w_count = len(cl["wallets"])
-total_sol = cl["total"]
-seen = seen_str(cl["first_ts"])
-txt = (
-f" <b>MULTI BUY {sym_name}</b>\n\n"
-f"{w_count} wallets bought <b>{sym_name}</b> in the last 6 hours!\n"
-f"Total: {total_sol:.2f} SOL\n\n"
-)
-for w, info in cl["wallets"].items():
-amt = info["amt"]
-age = tx_age_str(info["ts"])
-total_buy = ledger[(w, mint)]["buy"]
-hp = hold_percent(w, mint)
-icon = status_icon(hp)
-txt += (
-f"{icon} {emoji(w)} ({age})\n"
-f"├ <b>{amt:.2f} SOL</b> | MC {format_mc(mcap)}\n"
-f"└ Total buy: {total_buy:.2f} SOL | {hp}%\n\n"
-)
-txt += f" txt += f"<code>{mint}</code>"
-return txt
-#{sym_name} | MC: {format_mc(mcap)} | Seen: {seen}\n"
+    w_count   = len(cl["wallets"])
+    total_sol = cl["total"]
+    seen      = seen_str(cl["first_ts"])
+    
+    txt = (
+        f"‼️ 🟢 <b>MULTI BUY {sym_name}</b>\n\n"
+        f"{w_count} wallets bought <b>{sym_name}</b> in the last 6 hours!\n"
+        f"Total: {total_sol:.2f} SOL\n\n"
+    )
+
+    for w, info in cl["wallets"].items():
+        amt       = info["amt"]
+        age       = tx_age_str(info["ts"])
+        total_buy = ledger[(w, mint)]["buy"]
+        hp        = hold_percent(w, mint)
+        icon      = status_icon(hp)
+        txt += (f"{icon} {emoji(w)} ({age})\n"
+                f"├ <b>{amt:.2f} SOL</b> | MC {format_mc(mcap)}\n"
+                f"└ Total buy: {total_buy:.2f} SOL | 👊 {hp}%\n\n")
+
+    txt += f"🔗 #{sym_name} | MC: {format_mc(mcap)} | Seen: {seen}\n"
+    txt += f"<code>{mint}</code>"
+    return txt
+
 # ================= CLEANER =================
+
 def cleanup_loop():
-while True:
-time.sleep(1800)
-now = time.time()
-with lock:
-for sig in list(processed_signatures):
-if now - processed_signatures[sig] > SIGNATURE_TTL:
-del processed_signatures[sig]
-for k in list(wallet_agg):
-if now - wallet_agg[k]["first_ts"] > 600:
-del wallet_agg[k]
-for k in list(clusters):
-if now - clusters[k]["first_ts"] > CLUSTER_LIFETIME + 3600:
-del clusters[k]
-sent_multi.pop(k, None)
-for k in list(sent_ordinary):
-if now - sent_ordinary[k] > CLUSTER_LIFETIME:
-del sent_ordinary[k]
-for k in list(ledger):
-if now - ledger[k].get("last_ts", 0) > 86400:
-del ledger[k]
-for m in list(symbol_cache):
-if now - symbol_cache[m][1] > SYMBOL_TTL * 2:
-del symbol_cache[m]
-for m in list(market_cache):
-if now - market_cache[m][2] > 3600:
-del market_cache[m]
-logging.info(
-f"[Cleanup] sigs={len(processed_signatures)} "
-f"clusters={len(clusters)} ledger={len(ledger)}"
-)
+    while True:
+        time.sleep(1800)
+        now = time.time()
+        with lock:
+            for sig in list(processed_signatures):
+                if now - processed_signatures[sig] > SIGNATURE_TTL: del processed_signatures[sig]
+            for k in list(wallet_agg):
+                if now - wallet_agg[k]["first_ts"] > 600: del wallet_agg[k]
+            for k in list(clusters):
+                if now - clusters[k]["first_ts"] > CLUSTER_LIFETIME + 3600:
+                    del clusters[k]
+                    sent_multi.pop(k, None)
+            for k in list(sent_ordinary):
+                if now - sent_ordinary[k] > CLUSTER_LIFETIME: del sent_ordinary[k]
+            for k in list(ledger):
+                if now - ledger[k].get("last_ts", 0) > 86400: del ledger[k]
+
 threading.Thread(target=cleanup_loop, daemon=True).start()
-# ================= ACTIVE MULTI CHECK =================
-def is_active_multi(mint):
-if mint not in sent_multi:
-return False
-if mint in clusters:
-if time.time() - clusters[mint]["first_ts"] < CLUSTER_LIFETIME:
-return True
-return False
+
 # ================= ORDINARY ALERT =================
+
 def delayed_ordinary_send(wallet, mint, key):
-now = time.time()
-with lock:
-if is_active_multi(mint):
-logging.info(f"Ordinary suppressed (active multi): {mint[:8]}")
-wallet_agg.pop(key, None)
-return
-if key not in wallet_agg:
-return
-final_amt = wallet_agg[key]["amount"]
-del wallet_agg[key]
-sent_ordinary[key] = now
-symbol = get_symbol(mint)
-if symbol.upper() in STABLE_SYMBOLS:
-return
-mc, pair = get_market_with_retry(mint)
-ax = build_axiom(mint, pair)
-hp = hold_percent(wallet, mint)
-total_buy = ledger[(wallet, mint)]["buy"]
-logging.info(f"SEND ordinary | {emoji(wallet)} | {symbol} | {final_amt:.2f} SOL")
-txt = (
-f" <b>BUY {symbol}</b>\n\n"
-f"{status_icon(hp)} {emoji(wallet)}\n"
-f"├ <b>{final_amt:.2f} SOL</b> | MC {format_mc(mc)}\n"
-f"└ Total buy: {total_buy:.2f} SOL | {hp}%\n\n"
-f"<code>{mint}</code>"
-)
-send(txt, ax)
+    now = time.time()
+    symbol = get_symbol(mint)
+    
+    if is_blacklisted(symbol, mint):
+        with lock: wallet_agg.pop(key, None)
+        return
+
+    with lock:
+        if mint in sent_multi or key not in wallet_agg:
+            wallet_agg.pop(key, None)
+            return
+        final_amt = wallet_agg[key]["amount"]
+        del wallet_agg[key]
+        sent_ordinary[key] = now
+
+    mc, pair = get_market_with_retry(mint)
+    ax = build_axiom(mint, pair)
+    hp = hold_percent(wallet, mint)
+    total_buy = ledger[(wallet, mint)]["buy"]
+
+    txt = (f"🟢 <b>BUY {symbol}</b>\n\n"
+           f"{status_icon(hp)} {emoji(wallet)}\n"
+           f"├ <b>{final_amt:.2f} SOL</b> | MC {format_mc(mc)}\n"
+           f"└ Total buy: {total_buy:.2f} SOL | 👊 {hp}%\n\n"
+           f"<code>{mint}</code>")
+    send(txt, ax)
+
 # ================= WEBHOOK =================
+
 @app.route("/", methods=["POST"])
 def webhook():
-txs = request.json
-if not isinstance(txs, list):
-return jsonify(ok=True)
-now = time.time()
-for tx in txs:
-sig = tx.get("signature")
-if not sig:
-continue
-with lock:
-if sig in processed_signatures:
-continue
-processed_signatures[sig] = now
-wallet = tx.get("feePayer")
-if not wallet:
-continue
-net_sol = 0
-for acc in tx.get("accountData", []):
-if acc.get("account") == wallet:
-net_sol = acc.get("nativeBalanceChange", 0) / 1e9
-sol_abs = abs(net_sol)
-if sol_abs <= 0.005:
-continue
-bought_mint = None
-seen_mints = set()
-for t in tx.get("tokenTransfers", []):
-mint = t.get("mint")
-if mint == SOL_MINT or mint in seen_mints:
-continue
-if t.get("toUserAccount") == wallet:
-with lock:
-ledger[(wallet, mint)]["buy"] += sol_abs
-ledger[(wallet, mint)]["last_ts"] = now
-bought_mint = mint
-seen_mints.add(mint)
-elif t.get("fromUserAccount") == wallet:
-with lock:
-ledger[(wallet, mint)]["sell"] += sol_abs
-ledger[(wallet, mint)]["last_ts"] = now
-seen_mints.add(mint)
-if not bought_mint:
-continue
-# Фільтри
-if bought_mint in STABLE_MINTS:
-continue
-symbol = get_symbol(bought_mint)
-if symbol.upper() in STABLE_SYMBOLS:
-continue
-logging.info(f"BUY | {emoji(wallet)} | {symbol} | {sol_abs:.2f} SOL")
-key = (wallet, bought_mint)
-# --- Звичайний алерт ---
-with lock:
-is_recent = key in sent_ordinary and now - sent_ordinary[key] < CLUSTER_LIFETIME
-if not is_recent and not is_active_multi(bought_mint):
-if key not in wallet_agg:
-wallet_agg[key] = {"amount": sol_abs, "first_ts": now, "timer_started": F
-else:
-wallet_agg[key]["amount"] += sol_abs
-if wallet_agg[key]["amount"] >= MIN_BUY_SOL and not wallet_agg[key]["timer_st
-wallet_agg[key]["timer_started"] = True
-threading.Timer(15.0, delayed_ordinary_send, args=[wallet, bought_mint, k
-# --- Multi-wallet алерт ---
-if sol_abs >= MULTI_MIN_SOL:
-with lock:
-# Новий кластер якщо старий вичерпався
-if bought_mint not in clusters or now - clusters[bought_mint]["first_ts"] > C
-clusters[bought_mint] = {
-"wallets": {},
-"total": 0.0,
-"first_ts": now,
-"sym": symbol
-}
-cl = clusters[bought_mint]
-# Оновлюємо суму якщо гаманець вже є (докупив)
-if wallet in cl["wallets"]:
-cl["wallets"][wallet]["amt"] += sol_abs
-cl["wallets"][wallet]["ts"] = now
-cl["total"] += sol_abs
-else:
-cl["wallets"][wallet] = {"amt": sol_abs, "ts": now}
-cl["total"] += sol_abs
-w_count = len(cl["wallets"])
-last_sent_info = sent_multi.get(bought_mint, {"count": 0, "ts": 0})
-# Надсилаємо якщо: вперше досягли порогу АБО додався новий гаманець
-should_send = w_count >= MULTI_MIN_WALLETS and w_count > last_sent_info["coun
-if should_send:
-sent_multi[bought_mint] = {"count": w_count, "ts": now}
-# Скасовуємо pending ordinary
-for k in list(wallet_agg):
-if k[1] == bought_mint:
-del wallet_agg[k]
-snapshot_cl = {
-"wallets": {w: dict(info) for w, info in cl["wallets"].items()},
-"total": cl["total"],
-"first_ts": cl["first_ts"],
-"sym": cl.get("sym", symbol)
-}
-snap_mint = bought_mint
-snap_symbol = symbol
-def send_multi_alert(m, snap, sym_name):
-mcap, pr = get_market_with_retry(m)
-ax_url = build_axiom(m, pr)
-txt = build_multi_text(m, snap, mcap, sym_name)
-logging.info(
-f"SEND multi | {sym_name} | {len(snap['wallets'])} wallets f"{snap['total']:.2f} SOL | MC {format_mc(mcap)}"
-)
-| "
-send(txt, ax_url)
-threading.Thread(
-target=send_multi_alert,
-args=[snap_mint, snapshot_cl, snap_symbol]
-).start()
-return jsonify(ok=True)
+    txs = request.json
+    if not isinstance(txs, list): return jsonify(ok=True)
+    now = time.time()
+
+    for tx in txs:
+        sig = tx.get("signature")
+        if not sig: continue
+        with lock:
+            if sig in processed_signatures: continue
+            processed_signatures[sig] = now
+
+        wallet = tx.get("feePayer")
+        if not wallet: continue
+
+        net_sol = 0
+        for acc in tx.get("accountData", []):
+            if acc.get("account") == wallet:
+                net_sol = acc.get("nativeBalanceChange", 0) / 1e9
+        
+        sol_abs = abs(net_sol)
+        if sol_abs <= 0.005: continue
+
+        bought_mint = None
+        seen_mints = set()
+        for t in tx.get("tokenTransfers", []):
+            m = t.get("mint")
+            if m == SOL_MINT or m in seen_mints: continue
+            if t.get("toUserAccount") == wallet:
+                with lock:
+                    ledger[(wallet, m)]["buy"] += sol_abs
+                    ledger[(wallet, m)]["last_ts"] = now
+                bought_mint = m
+                seen_mints.add(m)
+            elif t.get("fromUserAccount") == wallet:
+                with lock:
+                    ledger[(wallet, m)]["sell"] += sol_abs
+                    ledger[(wallet, m)]["last_ts"] = now
+                seen_mints.add(m)
+
+        if not bought_mint: continue
+        
+        symbol = get_symbol(bought_mint)
+        if is_blacklisted(symbol, bought_mint): continue
+
+        key = (wallet, bought_mint)
+        with lock:
+            is_recent = key in sent_ordinary and now - sent_ordinary[key] < CLUSTER_LIFETIME
+            if not is_recent and bought_mint not in sent_multi:
+                if key not in wallet_agg:
+                    wallet_agg[key] = {"amount": sol_abs, "first_ts": now, "timer_started": False}
+                else:
+                    wallet_agg[key]["amount"] += sol_abs
+
+                if wallet_agg[key]["amount"] >= MIN_BUY_SOL and not wallet_agg[key]["timer_started"]:
+                    wallet_agg[key]["timer_started"] = True
+                    threading.Timer(15.0, delayed_ordinary_send, args=[wallet, bought_mint, key]).start()
+
+        if sol_abs >= MULTI_MIN_SOL:
+            with lock:
+                if bought_mint not in clusters or now - clusters[bought_mint]["first_ts"] > CLUSTER_LIFETIME:
+                    clusters[bought_mint] = {"wallets": {}, "total": 0.0, "first_ts": now, "sym": symbol}
+                
+                cl = clusters[bought_mint]
+                if wallet in cl["wallets"]:
+                    cl["wallets"][wallet]["amt"] += sol_abs
+                    cl["wallets"][wallet]["ts"] = now
+                else:
+                    cl["wallets"][wallet] = {"amt": sol_abs, "ts": now}
+                cl["total"] += sol_abs
+
+                w_count = len(cl["wallets"])
+                last_sent_info = sent_multi.get(bought_mint, {"count": 0, "ts": 0})
+
+                if w_count >= MULTI_MIN_WALLETS and w_count > last_sent_info["count"]:
+                    sent_multi[bought_mint] = {"count": w_count, "ts": now}
+                    # Очищуємо звичайні алерти для цього токена
+                    for k in list(wallet_agg):
+                        if k[1] == bought_mint: del wallet_agg[k]
+
+                    snap = {"wallets": {w: dict(info) for w, info in cl["wallets"].items()}, 
+                            "total": cl["total"], "first_ts": cl["first_ts"]}
+                    
+                    def run_multi(m, s, sym):
+                        mcap, pr = get_market_with_retry(m)
+                        send(build_multi_text(m, s, mcap, sym), build_axiom(m, pr))
+                    
+                    threading.Thread(target=run_multi, args=[bought_mint, snap, symbol]).start()
+
+    return jsonify(ok=True)
+
 if __name__ == "__main__":
-app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
