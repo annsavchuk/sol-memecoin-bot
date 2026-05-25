@@ -206,7 +206,7 @@ WALLET_EMOJI = {
     "7aMgK5L4qEQ8Nyv6ZzhZi2B82NSSRnwb2NGJnNagA46D": "🍿 70%+66k",
     "J6TDXvarvpBdPXTaTU8eJbtso1PUCYKGkVtMKUUY8iEa": "🧂 +$115k",
     "4SbDMrX8Zfj7qZtRKTBSQEavPkc7BP1kiJfT2f3dn8RL": "🦈 АКУЛА",
-    "8MaVa9kdt3NW4Q5HyNMm1X5LbR8PQRVDc1W8NMVK88D5": "🏖 Daumen",
+    "8MaVa9kdt3NW4Q5HyNAm1X5LbR8PQRVDc1W8NMVK88D5": "🏖 Daumen",
     "CLegS2MSiCsBksVazCg4Y7Gz3NqeBK21QyvzK4Q7S168": "🐝 NEW-13",
     "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o": "👽 kentes",
     "5h7yzwmrGoG2BmxNCqNR2EnSv1LWCFo7n6SKSh5ZWkfE": "🖌 307H",
