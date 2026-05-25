@@ -21,7 +21,7 @@ MULTI_MIN_SOL     = 5
 MULTI_MIN_WALLETS = 3
 CLUSTER_LIFETIME  = 6 * 3600
 SIGNATURE_TTL     = 600
-MIN_MC_USD        = 40_000
+MIN_MC_USD        = 30_000  # $30K — після міграції
 
 STABLE_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT", "DAI", "USD", "SOLANA"}
 
@@ -269,6 +269,41 @@ def seen_str(first_ts):
     if diff < 3600: return f"{diff//60}m"
     return f"{diff//3600}h"
 
+# ================= JUPITER FALLBACK =================
+def get_jupiter_data(mint):
+    """
+    Резервне джерело даних — Jupiter API.
+    Повертає (symbol, mc) або (None, 0) якщо не знайдено.
+    Jupiter знає про всі токени на Solana включно з Orca/Meteora/старими токенами.
+    """
+    try:
+        # Jupiter token info
+        r = requests.get(
+            f"https://tokens.jup.ag/token/{mint}",
+            timeout=5
+        ).json()
+        symbol = r.get("symbol")
+
+        # Jupiter price API для MC
+        price_r = requests.get(
+            f"https://price.jup.ag/v6/price?ids={mint}",
+            timeout=5
+        ).json()
+        price_data = price_r.get("data", {}).get(mint, {})
+        price = price_data.get("price", 0)
+
+        # MC = price * supply (якщо є)
+        supply = r.get("extensions", {}).get("coingeckoId") or 0
+        mc = 0
+        if price and r.get("tags"):
+            # Беремо marketCap напряму якщо є
+            mc = price_data.get("marketCap", 0) or 0
+
+        return symbol, mc
+    except Exception as e:
+        logging.warning(f"Jupiter fallback error {mint[:8]}: {e}")
+        return None, 0
+
 # ================= SYMBOL CACHE =================
 def get_symbol(mint):
     now = time.time()
@@ -276,6 +311,8 @@ def get_symbol(mint):
         sym, ts = symbol_cache[mint]
         if now - ts < SYMBOL_TTL:
             return sym
+
+    # Спроба 1: dexscreener
     try:
         r = requests.get(
             f"https://api.dexscreener.com/latest/dex/tokens/{mint}",
@@ -286,68 +323,94 @@ def get_symbol(mint):
             symbol_cache[mint] = (sym, now)
             return sym
     except Exception as e:
-        logging.warning(f"get_symbol error {mint[:8]}: {e}")
+        logging.warning(f"get_symbol dexscreener error {mint[:8]}: {e}")
+
+    # Спроба 2: Jupiter fallback
+    try:
+        r = requests.get(f"https://tokens.jup.ag/token/{mint}", timeout=5).json()
+        sym = r.get("symbol")
+        if sym:
+            symbol_cache[mint] = (sym, now)
+            return sym
+    except Exception as e:
+        logging.warning(f"get_symbol jupiter error {mint[:8]}: {e}")
+
     # Не кешуємо якщо не отримали — щоб наступний запит повторив
     return mint[:6]
 
 # ================= MARKET CACHE =================
 def get_market(mint):
     """
-    ✅ Sticky MC cache:
+    ✅ Sticky MC cache + Jupiter fallback:
     Структура: (mc, pair, fetch_ts, valid_mc, valid_pair)
-    - mc, pair        — поточні дані (можуть бути 0/None)
-    - fetch_ts        — коли останній раз робили запит
-    - valid_mc        — ОСТАННІ ВАЛІДНІ дані (mc > 0), НІКОЛИ не замінюються нулем
-    - valid_pair      — пара від останнього валідного запиту
-
-    Повертає (valid_mc, valid_pair) якщо є, або (0, None) якщо ще не було валідних даних.
+    - valid_mc/valid_pair — останні валідні дані, НІКОЛИ не замінюються нулем
+    - Якщо dexscreener повертає 0 — пробуємо Jupiter
+    - Якщо обидва повернули 0 — тримаємо попередні валідні дані
     """
     now = time.time()
 
     if mint in market_cache:
         mc, pair, fetch_ts, valid_mc, valid_pair = market_cache[mint]
-        # Якщо кеш ще свіжий — повертаємо валідні дані
         if now - fetch_ts < MARKET_TTL:
             return valid_mc, valid_pair
 
-    # Час оновити
+    # Отримуємо попередні валідні дані
+    prev_valid_mc   = 0
+    prev_valid_pair = None
+    if mint in market_cache:
+        _, _, _, prev_valid_mc, prev_valid_pair = market_cache[mint]
+
+    # Спроба 1: dexscreener
     try:
         r = requests.get(
             f"https://api.dexscreener.com/latest/dex/tokens/{mint}",
             timeout=5
         ).json()
 
-        # Отримуємо попередні валідні дані (якщо є)
-        prev_valid_mc   = 0
-        prev_valid_pair = None
-        if mint in market_cache:
-            _, _, _, prev_valid_mc, prev_valid_pair = market_cache[mint]
+        if r.get("pairs"):
+            # Спочатку шукаємо solana пару, якщо немає — беремо будь-яку
+            sol_pairs = [x for x in r["pairs"] if x.get("chainId") == "solana"]
+            p = sol_pairs[0] if sol_pairs else r["pairs"][0]
+            mc   = p.get("fdv", 0) or 0
+            pair = p.get("pairAddress")
 
-        if not r.get("pairs"):
-            # ✅ Немає пар — зберігаємо fetch_ts але НЕ затираємо валідні дані
-            market_cache[mint] = (0, None, now, prev_valid_mc, prev_valid_pair)
-            return prev_valid_mc, prev_valid_pair
+            # ✅ Якщо fdv = 0 — пробуємо marketCap або priceUsd * supply
+            if mc == 0:
+                mc = p.get("marketCap", 0) or 0
+            if mc == 0 and p.get("priceUsd") and p.get("liquidity", {}).get("usd"):
+                # Груба оцінка через ліквідність якщо немає fdv
+                pass
 
-        p    = next((x for x in r["pairs"] if x.get("chainId") == "solana"), r["pairs"][0])
-        mc   = p.get("fdv", 0) or 0
-        pair = p.get("pairAddress")
-
-        if mc > 0:
-            # ✅ Отримали валідні дані — оновлюємо і поточні і валідні
-            market_cache[mint] = (mc, pair, now, mc, pair)
-            return mc, pair
-        else:
-            # ✅ MC = 0 (токен є але fdv відсутній) — НЕ затираємо валідні
-            market_cache[mint] = (0, pair or prev_valid_pair, now, prev_valid_mc, prev_valid_pair)
-            return prev_valid_mc, prev_valid_pair
-
+            if mc > 0:
+                market_cache[mint] = (mc, pair, now, mc, pair)
+                return mc, pair
+            else:
+                # fdv відсутній — спробуємо Jupiter нижче
+                pass
+        # Немає пар або mc = 0 — падаємо в Jupiter fallback
     except Exception as e:
-        logging.warning(f"get_market error {mint[:8]}: {e}")
-        # ✅ При помилці — НЕ оновлюємо кеш, повертаємо валідні дані якщо є
-        if mint in market_cache:
-            _, _, _, valid_mc, valid_pair = market_cache[mint]
-            return valid_mc, valid_pair
-        return 0, None
+        logging.warning(f"get_market dexscreener error {mint[:8]}: {e}")
+
+    # Спроба 2: Jupiter Price API
+    try:
+        price_r = requests.get(
+            f"https://price.jup.ag/v6/price?ids={mint}",
+            timeout=5
+        ).json()
+        price_data = price_r.get("data", {}).get(mint, {})
+        mc_jup = price_data.get("marketCap", 0) or 0
+
+        if mc_jup > 0:
+            logging.info(f"Jupiter MC found: {format_mc(mc_jup)} for {mint[:8]}")
+            # pair беремо з попередніх валідних або None
+            market_cache[mint] = (mc_jup, prev_valid_pair, now, mc_jup, prev_valid_pair)
+            return mc_jup, prev_valid_pair
+    except Exception as e:
+        logging.warning(f"get_market jupiter error {mint[:8]}: {e}")
+
+    # Обидва не дали результат — НЕ затираємо валідні дані
+    market_cache[mint] = (0, prev_valid_pair, now, prev_valid_mc, prev_valid_pair)
+    return prev_valid_mc, prev_valid_pair
 
 def get_market_with_retry(mint, retries=3, delay=3):
     """3 спроби. Завжди повертає найкращі доступні дані."""
@@ -635,7 +698,8 @@ def webhook():
                     wallet_agg[key]["amount"] += sol_abs
                 if wallet_agg[key]["amount"] >= MIN_BUY_SOL and not wallet_agg[key]["timer_started"]:
                     wallet_agg[key]["timer_started"] = True
-                    threading.Timer(15.0, delayed_ordinary_send,
+                    # ✅ 20 секунд — більше ніж multi (15с), щоб multi завжди спрацював першим
+                    threading.Timer(20.0, delayed_ordinary_send,
                                     args=[wallet, bought_mint, key]).start()
 
         # --- Multi ---
@@ -660,6 +724,14 @@ def webhook():
                     cl["wallets"][wallet] = {"amt": sol_abs, "ts": now}
                     cl["total"] += sol_abs
 
+                # ✅ Фіксуємо символ — беремо перший валідний (не обрізаний mint)
+                # Якщо поточний sym виглядає як обрізаний mint — оновлюємо
+                current_sym = cl.get("sym", "")
+                is_stub = (len(current_sym) <= 6 and current_sym == bought_mint[:len(current_sym)])
+                is_valid_sym = (len(symbol) > 1 and symbol != bought_mint[:6])
+                if is_stub and is_valid_sym:
+                    cl["sym"] = symbol
+
                 w_count     = len(cl["wallets"])
                 snap_symbol = cl.get("sym", symbol)
                 last_count  = sent_multi.get(bought_mint, {"count": 0})["count"]
@@ -669,8 +741,9 @@ def webhook():
                 should_fire = w_count >= MULTI_MIN_WALLETS and w_count > last_count
 
             if should_fire:
+                # ✅ 15 секунд — достатньо щоб зібрати всі одночасні покупки
                 threading.Timer(
-                    5.0, send_multi_alert,
+                    15.0, send_multi_alert,
                     args=[bought_mint, snap_symbol]
                 ).start()
 
