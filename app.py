@@ -23,16 +23,28 @@ CLUSTER_LIFETIME  = 6 * 3600
 SIGNATURE_TTL     = 600
 MIN_MC_USD        = 30_000  # $30K — після міграції
 
-STABLE_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT", "DAI", "USD", "SOLANA"}
+# ✅ Час блокування повторного ordinary алерту для одного гаманця/токена
+# Має бути МЕНШЕ ніж CLUSTER_LIFETIME щоб не пропускати нові покупки після закінчення кластера
+ORDINARY_REENTRY_TTL = 3 * 3600  # 3 години
+
+# ✅ Вікно агрегації — якщо гаманець купує по 0.02 SOL багато разів,
+# рахуємо загальну суму за 60 секунд (як домовлялись раніше)
+SMALL_TX_WINDOW = 60
+
+STABLE_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT", "DAI", "USD", "SOLANA", "USD1", "USDS", "USDH", "USDY", "PYUSD"}
 
 STABLE_MINTS = {
-    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
-    "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
-    "So11111111111111111111111111111111111111112",
-    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
-    "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj",
-    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  # USDT
+    "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",  # WETH
+    "So11111111111111111111111111111111111111112",      # WSOL
+    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",  # mSOL
+    "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj",  # stSOL
+    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",   # bSOL
+    "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",  # PYUSD
+    "USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA",   # USDS
+    "USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX",   # USDH
+    "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB",   # USD1 (World Liberty)
 }
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
@@ -272,37 +284,19 @@ def seen_str(first_ts):
 # ================= JUPITER FALLBACK =================
 def get_jupiter_data(mint):
     """
-    Резервне джерело даних — Jupiter API.
-    Повертає (symbol, mc) або (None, 0) якщо не знайдено.
-    Jupiter знає про всі токени на Solana включно з Orca/Meteora/старими токенами.
+    Резервне джерело — Jupiter Price API.
+    Повертає mc або 0. Недоступний на Render free tier через DNS.
     """
     try:
-        # Jupiter token info
-        r = requests.get(
-            f"https://tokens.jup.ag/token/{mint}",
-            timeout=5
-        ).json()
-        symbol = r.get("symbol")
-
-        # Jupiter price API для MC
         price_r = requests.get(
             f"https://price.jup.ag/v6/price?ids={mint}",
             timeout=5
         ).json()
         price_data = price_r.get("data", {}).get(mint, {})
-        price = price_data.get("price", 0)
-
-        # MC = price * supply (якщо є)
-        supply = r.get("extensions", {}).get("coingeckoId") or 0
-        mc = 0
-        if price and r.get("tags"):
-            # Беремо marketCap напряму якщо є
-            mc = price_data.get("marketCap", 0) or 0
-
-        return symbol, mc
+        return price_data.get("marketCap", 0) or 0
     except Exception as e:
-        logging.warning(f"Jupiter fallback error {mint[:8]}: {e}")
-        return None, 0
+        logging.warning(f"Jupiter error {mint[:8]}: {e}")
+        return 0
 
 # ================= SYMBOL CACHE =================
 def get_symbol(mint):
@@ -325,17 +319,19 @@ def get_symbol(mint):
     except Exception as e:
         logging.warning(f"get_symbol dexscreener error {mint[:8]}: {e}")
 
-    # Спроба 2: Jupiter fallback
+    # Спроба 2: Jupiter tokens API (може бути недоступний на Render free)
     try:
-        r = requests.get(f"https://tokens.jup.ag/token/{mint}", timeout=5).json()
+        r = requests.get(
+            f"https://tokens.jup.ag/token/{mint}",
+            timeout=3
+        ).json()
         sym = r.get("symbol")
         if sym:
             symbol_cache[mint] = (sym, now)
             return sym
-    except Exception as e:
-        logging.warning(f"get_symbol jupiter error {mint[:8]}: {e}")
+    except Exception:
+        pass  # Мовчки пропускаємо — Jupiter може бути недоступний
 
-    # Не кешуємо якщо не отримали — щоб наступний запит повторив
     return mint[:6]
 
 # ================= MARKET CACHE =================
@@ -502,7 +498,7 @@ def cleanup_loop():
                     del clusters[k]
                     sent_multi.pop(k, None)
             for k in list(sent_ordinary):
-                if now - sent_ordinary[k] > CLUSTER_LIFETIME:
+                if now - sent_ordinary[k] > ORDINARY_REENTRY_TTL:
                     del sent_ordinary[k]
             for k in list(ledger):
                 if now - ledger[k].get("last_ts", 0) > 86400:
@@ -522,10 +518,17 @@ threading.Thread(target=cleanup_loop, daemon=True).start()
 
 # ================= ACTIVE MULTI =================
 def is_active_multi(mint):
+    """
+    Повертає True тільки якщо кластер активний І був відправлений multi алерт.
+    ✅ Використовуємо CLUSTER_LIFETIME - 30хв щоб не блокувати ordinary на межі
+    """
     if mint not in sent_multi:
         return False
     if mint in clusters:
-        if time.time() - clusters[mint]["first_ts"] < CLUSTER_LIFETIME:
+        age = time.time() - clusters[mint]["first_ts"]
+        # ✅ Залишаємо 30 хвилин буфер — якщо кластер майже вичерпався,
+        # не блокуємо ordinary щоб не пропустити нові покупки
+        if age < CLUSTER_LIFETIME - 1800:
             return True
     return False
 
@@ -538,6 +541,7 @@ def delayed_ordinary_send(wallet, mint, key):
             wallet_agg.pop(key, None)
             return
         if key not in wallet_agg:
+            logging.info(f"Ordinary skipped — not in agg: {mint[:8]}")
             return
         final_amt = wallet_agg[key]["amount"]
         del wallet_agg[key]
@@ -545,9 +549,11 @@ def delayed_ordinary_send(wallet, mint, key):
 
     symbol = get_symbol(mint)
     if symbol.upper() in STABLE_SYMBOLS:
+        logging.info(f"Ordinary skipped — stable symbol: {symbol}")
         return
 
     mc, pair = get_market_with_retry(mint)
+    logging.info(f"Ordinary MC check | {symbol} | MC={format_mc(mc)} | migrated={is_migrated(mc)}")
 
     if not is_migrated(mc):
         logging.info(f"Ordinary skipped — pump.fun: MC {format_mc(mc)} for {symbol}")
@@ -689,30 +695,55 @@ def webhook():
         key = (wallet, bought_mint)
 
         # --- Ordinary ---
+        # ✅ Агрегуємо ВСІ транзакції гаманця по токену за SMALL_TX_WINDOW
+        # Це дозволяє ловити снайпер-боти які купують по 0.02 SOL багато разів
         with lock:
-            is_recent = key in sent_ordinary and now - sent_ordinary[key] < CLUSTER_LIFETIME
+            is_recent = key in sent_ordinary and now - sent_ordinary[key] < ORDINARY_REENTRY_TTL
             if not is_recent and not is_active_multi(bought_mint):
                 if key not in wallet_agg:
                     wallet_agg[key] = {"amount": sol_abs, "first_ts": now, "timer_started": False}
                 else:
-                    wallet_agg[key]["amount"] += sol_abs
+                    # Якщо вікно агрегації не вичерпалось — додаємо
+                    if now - wallet_agg[key]["first_ts"] < SMALL_TX_WINDOW:
+                        wallet_agg[key]["amount"] += sol_abs
+                    else:
+                        # Вікно вичерпалось — починаємо новий цикл
+                        wallet_agg[key] = {"amount": sol_abs, "first_ts": now, "timer_started": False}
+
                 if wallet_agg[key]["amount"] >= MIN_BUY_SOL and not wallet_agg[key]["timer_started"]:
                     wallet_agg[key]["timer_started"] = True
-                    # ✅ 20 секунд — більше ніж multi (15с), щоб multi завжди спрацював першим
                     threading.Timer(20.0, delayed_ordinary_send,
                                     args=[wallet, bought_mint, key]).start()
 
         # --- Multi ---
-        if sol_abs >= MULTI_MIN_SOL:
+        # ✅ Для multi враховуємо накопичену суму транзакцій гаманця
+        with lock:
+            accumulated = wallet_agg.get(key, {}).get("amount", sol_abs)
+
+        if accumulated >= MULTI_MIN_SOL or sol_abs >= MULTI_MIN_SOL:
             with lock:
-                if (bought_mint not in clusters
-                        or now - clusters[bought_mint]["first_ts"] > CLUSTER_LIFETIME):
+                cluster_expired = (
+                    bought_mint not in clusters
+                    or now - clusters[bought_mint]["first_ts"] > CLUSTER_LIFETIME
+                )
+                if cluster_expired:
+                    # ✅ Кластер вичерпався — повний скид стану для цього токена
+                    # Без цього старий sent_multi блокує новий multi,
+                    # а старий sent_ordinary блокує ordinary
                     clusters[bought_mint] = {
                         "wallets":  {},
                         "total":    0.0,
                         "first_ts": now,
                         "sym":      symbol,
                     }
+                    # Скидаємо sent_multi щоб новий кластер міг відправити multi
+                    sent_multi.pop(bought_mint, None)
+                    # Скидаємо sent_ordinary для всіх гаманців цього токена
+                    # щоб нові покупки не блокувались старим TTL
+                    for k in list(sent_ordinary):
+                        if k[1] == bought_mint:
+                            del sent_ordinary[k]
+                    logging.info(f"Cluster reset for {bought_mint[:8]} — fresh start")
 
                 cl = clusters[bought_mint]
 
